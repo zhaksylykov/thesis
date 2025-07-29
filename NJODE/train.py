@@ -29,7 +29,7 @@ from configs import config
 import models
 import data_utils
 sys.path.append("../")
-import baselines.GRU_ODE_Bayes.models_gru_ode_bayes as models_gru_ode_bayes
+#import baselines.GRU_ODE_Bayes.models_gru_ode_bayes as models_gru_ode_bayes
 
 try:
     from telegram_notifications import send_bot_message as SBM
@@ -679,7 +679,8 @@ def train(
     elif options['other_model'] == "NJmodel":
         model_name = 'NJmodel'
         params_dict["hidden_size"] = output_size
-        model = models.NJmodel(**params_dict)
+        model = models.NJmodel(**params_dict) 
+    """
     elif options['other_model'] == "GRU_ODE_Bayes":  # see train documentation
         model_name = 'GRU-ODE-Bayes'
         # get parameters for GRU-ODE-Bayes model
@@ -718,7 +719,8 @@ def train(
             logvar=logvar, mixing=mixing,
             dropout_rate=params_dict['dropout_rate'],
             full_gru_ode=full_gru_ode, solver=solver, impute=impute,
-        )
+        ) 
+    """
     else:
         raise ValueError("Invalid argument for (option) parameter 'other_model'."
                          "Please check docstring for correct use.")
