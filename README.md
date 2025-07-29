@@ -16,7 +16,7 @@ The goal is to adapt the NJ-ODEs framework ([floriankrach.github.io/njode](https
 ## What’s Different in This Repository. 
 
 - **Added configs:** 3 configs files added for 1d OU, 3d OU, and 1d GMB process 
-- **Z process datasets generation** Generation of datasets from (`$Z_t = (X_{\tau(t)} - X_t)(X_{\tau(t)} - X_t)^T$`)
+- **Z process datasets generation** Generation of datasets from (`Z_t = (X_{τ(t)} - X_t)(X_{τ(t)} - X_t)^T`)
 - **New loss functions** Introduced the "easy_vol" loss
 - **`generate.py`**: The main script for producing new synthetic time series using trained NJ-ODE models
 - **Jupyter notebooks**: Includes notebooks with all experimental test runs.
