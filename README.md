@@ -24,11 +24,25 @@ The goal is to adapt the NJ-ODEs framework ([floriankrach.github.io/njode](https
 
 ---  
 ## Requirements. 
-Same as in the original codebase, see [FlorianKrach/PD-NJODE](https://github.com/FlorianKrach/PD-NJODE) 
+Same as in the original codebase, see [FlorianKrach/PD-NJODE/README](https://github.com/FlorianKrach/PD-NJODE?tab=readme-ov-file) 
 
 ---   
 ## Usage, License & Citation.  
-This code can be used in accordance with the \LICENSE.
+Same as in the original codebase, see [FlorianKrach/PD-NJODE/README](https://github.com/FlorianKrach/PD-NJODE?tab=readme-ov-file) 
+
+---   
+## Acknowledgements and References 
+Same as in the original codebase, see [FlorianKrach/PD-NJODE/README](https://github.com/FlorianKrach/PD-NJODE?tab=readme-ov-file)  
+
+## Instructions for generating synthetic data as in the thesis 
+
+Experiments were conducted using 3 processes, speciffically 1-dimensional Geometric Brownian motion, 1-dimensional Ornstein-Uhlenbeck, 3-dimensional Ornstein-Uhlenbeck process. Configs for them can be found in the following folder NJODE/configs/.  
+
+To generate synthetic data, first you have to create dataset from known process then train NJ-ODE model. Then you can 
+
+
+
+
 
 
 
