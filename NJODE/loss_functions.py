@@ -243,6 +243,79 @@ def compute_loss_noisy_obs(
             Y_var_bj=Y_var_bj, Y_var=Y_var, dim_to=dim_to, type=var_loss_type)
 
     return outer / batch_size
+​
+Azamat Zhaksylykov​
+def compute_loss_2_vol(X_obs, Y_obs, Y_obs_bj, n_obs_ot, batch_size, eps=1e-10,
+
+                   weight=0.5, M_obs=None):
+
+    """
+
+    similar to compute_loss_2, but it takes Z_t as input not X_t
+
+    """
+
+    if M_obs is None:
+
+        M_obs = 1.
+
+ 
+
+    d_2_ob=Y_obs.shape[1]
+
+    d_ob=int(np.sqrt(d_2_ob))
+
+    Y_obs_matrix = Y_obs.view(-1,d_ob,d_ob)
+
+    Y_obs1=torch.matmul(Y_obs_matrix.transpose(1,2),Y_obs_matrix)
+
+ 
+
+    d_2_ob_bj=Y_obs_bj.shape[1]
+
+    d_ob_bj=int(np.sqrt(d_2_ob_bj))
+
+    Y_obs_bj_matrix = Y_obs_bj.view(-1,d_ob_bj,d_ob_bj)
+
+    Y_obs_bj1=torch.matmul(Y_obs_bj_matrix.transpose(1,2),Y_obs_bj_matrix)
+
+ 
+
+    Y_obs2=Y_obs1.view(-1,d_2_ob)
+
+    Y_obs_bj2=Y_obs_bj1.view(-1,d_2_ob_bj)
+
+ 
+
+    # inner = (2*weight * torch.sqrt(
+
+    #    torch.sum(M_obs * (X_obs - Y_obs2) ** 2, dim=1) + eps) +
+
+    #         2*(1 - weight) * torch.sqrt(
+
+    #            torch.sum(M_obs * (Y_obs_bj2 - X_obs) ** 2, dim=1)
+
+    #            + eps)) ** 2
+
+    
+
+    inner = (2*weight * torch.sqrt(
+
+        torch.sum(M_obs * (Y_obs2) ** 2, dim=1) + eps) +
+
+             2*(1 - weight) * torch.sqrt(
+
+                torch.sum(M_obs * (Y_obs_bj2 - X_obs) ** 2, dim=1)
+
+                + eps)) ** 2
+
+    
+
+    #inner = torch.sum(M_obs * (Y_obs_bj2 - X_obs) ** 2)
+
+    outer = torch.sum(inner / n_obs_ot)
+
+    return outer / batch_size
 
 
 def compute_loss_3(
@@ -452,6 +525,7 @@ LOSS_FUN_DICT = {
     'standard': compute_loss,
     'easy': compute_loss_2,
     'very_easy': compute_loss_2_1,
+    'easy_vol' : compute_loss_2_vol,
     'IO': compute_loss_2_1,
     'noisy_obs': compute_loss_noisy_obs,
     'abs': compute_loss_3,
