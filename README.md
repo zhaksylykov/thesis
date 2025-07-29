@@ -87,9 +87,11 @@ Make sure to:
 - Set the correct config import inside `generate.py`
 - Use the correct IDs for the model checkpoints found in `data/saved_models/`
 
-You can change the number of synthetic paths by adjusting the `--n_paths` argument. Also name of the saved file by adjusting `synthetic_data.npy`. 
+You can change the number of synthetic paths by adjusting the `--n_paths` argument. The name of the saved output file can be changed by adjusting the `--output_name=`. 
 
-
+### Note 
+For smaller experiments, I found it convenient to use the notebook [explainability_njodes.ipynb](https://gist.github.com/FlorianKrach/7a610cd88d9739b2f8bbda8455a558b4).  
+Experiments run using this notebook are  inside the `Method I` and `Method II` folders in this repository.
 
 
 
