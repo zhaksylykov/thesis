@@ -36,12 +36,58 @@ Same as in the original codebase, see [FlorianKrach/PD-NJODE/README](https://git
 
 ## Instructions for generating synthetic data as in the thesis 
 
-Experiments were conducted using 3 processes, speciffically 1-dimensional Geometric Brownian motion, 1-dimensional Ornstein-Uhlenbeck, 3-dimensional Ornstein-Uhlenbeck process. Configs for them can be found in the following folder NJODE/configs/.  
+Experiments were conducted using 3 processes, specifically 1-dimensional Geometric Brownian motion, 1-dimensional Ornstein-Uhlenbeck, and 3-dimensional Ornstein-Uhlenbeck processes. Configs for them can be found in the following folder: `NJODE/configs/`.
 
-To generate synthetic data, first you have to create dataset from known process then train NJ-ODE model. Then you can 
+### How to run synthetic data generation
 
+Before generating synthetic data, you must first choose the appropriate config file for your experiment.  
+To do this, update the import path inside `generate.py` to point to the correct configuration (e.g., `1dBS`, `1dOU`, or `3dOU`).
 
+---
 
+#### If no trained model exists
+
+You need to follow two steps:
+
+**Step 1: Create dataset and train NJ-ODE models**
+
+```bash
+python generate.py --task=train
+```
+This will: 
+
+- Generates a synthetic dataset based on the selected process
+- Trains NJ-ODE models for both drift (`mu`) and volatility (`vol`)
+- Saves the trained model checkpoints inside `data/saved_models/
+
+#### Step 2: Generate synthetic data using trained models
+
+After training, you need to know the ID numbers of the saved models for the `X` and `Z` processes.  
+These IDs correspond to folder names inside the `data/saved_models/` directory.
+
+Then run:
+
+```bash
+python generate.py --task=generate --n_paths=1000 --mu_model_ckpt=1 --vol_model_ckpt=2 --output_name=synthetic_data.npy
+```
+
+Replace `1` and `2` with the actual checkpoint folder names for `mu` and `vol` models. 
+
+---
+
+### If trained models already exist
+
+If the NJ-ODE models have already been trained and saved, you can directly generate synthetic data using:
+
+```bash
+python generate.py --task=generate --n_paths=1000 --mu_model_ckpt=1 --vol_model_ckpt=2 --output_name=synthetic_data.npy
+```
+
+Make sure to:
+- Set the correct config import inside `generate.py`
+- Use the correct IDs for the model checkpoints found in `data/saved_models/`
+
+You can change the number of synthetic paths by adjusting the `--n_paths` argument. Also name of the saved file by adjusting `synthetic_data.npy`. 
 
 
 
