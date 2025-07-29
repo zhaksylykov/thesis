@@ -16,9 +16,33 @@ from scipy.special import iv
 
 from loss_functions import LOSS_FUN_DICT
 
-import matplotlib.animation as animation
+import matplotlib.animation as animation 
 
+# ==============================================================================
+# Helper functions 
+def create_Z_dataset(X, dt=1):
 
+    X_torch = torch.from_numpy(X)
+    dX = X_torch[:,:,dt:]-X_torch[:,:,:-dt]
+
+    Z=torch.einsum("b i t, b j t -> b i j t", dX, dX)
+    Z_flat = Z.reshape(Z.shape[0], Z.shape[1]*Z.shape[2] , Z.shape[3])
+    return Z_flat.numpy()
+
+def generate_features(X):
+    batch_size, num_features, time_steps = X.shape
+
+    features = [X[:, i, :] for i in range(num_features)]
+    new_features = []
+    new_features.extend(features)
+    new_features.extend([f ** 2 for f in features])
+
+    for combo in itertools.combinations(features, 2):
+        new_features.append(combo[0] * combo[1])
+
+    new_features = np.stack(new_features, axis=1)
+
+    return new_features
 # ==============================================================================
 # CLASSES
 class StockModel:
@@ -243,72 +267,7 @@ class StockModel:
             which_loss=which_loss)
         loss = res[0]
         return loss
-
-
-class Heston(StockModel):
-    """
-    the Heston model, see: https://en.wikipedia.org/wiki/Heston_model
-    a basic stochastic volatility stock price model
-    """
-
-    def __init__(self, drift, volatility, mean, speed, correlation, nb_paths,
-                 nb_steps, S0, maturity, sine_coeff=None, **kwargs):
-        super(Heston, self).__init__(
-            drift=drift, volatility=volatility, nb_paths=nb_paths,
-            nb_steps=nb_steps,
-            S0=S0, maturity=maturity,
-            sine_coeff=sine_coeff
-        )
-        self.mean = mean
-        self.speed = speed
-        self.correlation = correlation
-
-    def next_cond_exp(self, y, delta_t, current_t):
-        return y * np.exp(self.drift * self.periodic_coeff(current_t) * delta_t)
-
-    def generate_paths(self, start_X=None):
-        # Diffusion of the spot: dS = mu*S*dt + sqrt(v)*S*dW
-        spot_drift = lambda x, t: self.drift * self.periodic_coeff(t) * x
-        spot_diffusion = lambda x, v, t: np.sqrt(v) * x
-
-        # Diffusion of the variance: dv = -k(v-vinf)*dt + sqrt(v)*v*dW
-        var_drift = lambda v, t: - self.speed * (v - self.mean)
-        var_diffusion = lambda v, t: self.volatility * np.sqrt(v)
-
-        spot_paths = np.empty(
-            (self.nb_paths, self.dimensions, self.nb_steps + 1))
-        var_paths = np.empty(
-            (self.nb_paths, self.dimensions, self.nb_steps + 1))
-
-        dt = self.dt
-        if start_X is not None:
-            spot_paths[:, :, 0] = start_X
-        for i in range(self.nb_paths):
-            if start_X is None:
-                spot_paths[i, :, 0] = self.S0
-            var_paths[i, :, 0] = self.mean
-            for k in range(1, self.nb_steps + 1):
-                normal_numbers_1 = np.random.normal(0, 1, self.dimensions)
-                normal_numbers_2 = np.random.normal(0, 1, self.dimensions)
-                dW = normal_numbers_1 * np.sqrt(dt)
-                dZ = (self.correlation * normal_numbers_1 + np.sqrt(
-                    1 - self.correlation ** 2) * normal_numbers_2) * np.sqrt(dt)
-
-                var_paths[i, :, k] = (
-                        var_paths[i, :, k - 1]
-                        + var_drift(var_paths[i, :, k - 1], (k) * dt) * dt
-                        + var_diffusion(var_paths[i, :, k - 1], (k) * dt) * dZ)
-
-                spot_paths[i, :, k] = (
-                        spot_paths[i, :, k - 1]
-                        + spot_drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
-                        + spot_diffusion(spot_paths[i, :, k - 1],
-                                                var_paths[i, :, k],
-                                                (k) * dt) * dW)
-        # stock_path dimension: [nb_paths, dimension, time_steps]
-        return spot_paths, dt
-
-
+                            
 class HestonWOFeller(StockModel):
     """
     the Heston model, see: https://en.wikipedia.org/wiki/Heston_model
@@ -2970,8 +2929,51 @@ class OrnsteinUhlenbeck(StockModel):
                         + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
                         + diffusion(spot_paths[i, :, k - 1], (k) * dt) * dW)
         # stock_path dimension: [nb_paths, dimension, time_steps]
-        return spot_paths, dt
+        return spot_paths, dt 
 
+class OrnsteinUhlenbeckZ(StockModel):
+    def __init__(self, volatility, nb_paths, nb_steps, S0,
+                 mean, speed, maturity, sine_coeff=None, **kwargs):
+        super(OrnsteinUhlenbeckZ, self).__init__(
+            volatility=volatility, nb_paths=nb_paths, drift=None,
+            nb_steps=nb_steps, S0=S0, maturity=maturity,
+            sine_coeff=sine_coeff
+        )
+        self.mean = mean
+        self.speed = speed
+
+
+    def generate_paths(self, start_X=None):
+        # Diffusion of the variance: dv = -k(v-vinf)*dt + vol*dW
+        drift = lambda x, t: - self.speed * self.periodic_coeff(t) * (x - self.mean)
+        diffusion = lambda x, t: self.volatility
+
+        spot_paths = np.empty(
+            (self.nb_paths, self.dimensions, self.nb_steps + 1))
+        dt = self.dt
+        if start_X is not None:
+            spot_paths[:, :, 0] = start_X
+        for i in range(self.nb_paths):
+            if start_X is None:
+                spot_paths[i, :, 0] = self.S0
+            for k in range(1, self.nb_steps + 1):
+                random_numbers = np.random.normal(0, 1, self.dimensions)
+                dW = random_numbers * np.sqrt(dt)
+                spot_paths[i, :, k] = (
+                        spot_paths[i, :, k - 1]
+                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
+                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) * dW)
+        # stock_path dimension: [nb_paths, dimension, time_steps]
+        Z = np.zeros((self.nb_paths, self.dimensions, self.dimensions, self.nb_steps+1))
+        last_stock_obs = spot_paths[:,:,0].copy()
+
+        for t in range(1, self.nb_steps+1):
+            diff = spot_paths[:,:,t]-copy.deepcopy(last_stock_obs)
+            diff = diff[:,:,np.newaxis]
+            Z[:,:,:,t] = np.matmul(diff.transpose(0,2,1),diff)
+            last_stock_obs = spot_paths[:,:,t].copy()
+
+        return Z.reshape(self.nb_paths, self.dimensions**2, self.nb_steps+1), dt 
 
 class Combined(StockModel):
     def __init__(self, stock_model_names, hyperparam_dicts, **kwargs):
@@ -3210,11 +3212,6 @@ class DoublePendulumDataset(StockModel):
 
 
 
-
-
-
-
-
 # ==============================================================================
 # this is needed for computing the loss with the true conditional expectation
 def compute_loss(X_obs, Y_obs, Y_obs_bj, n_obs_ot, batch_size, eps=1e-10,
@@ -3235,6 +3232,326 @@ def compute_loss(X_obs, Y_obs, Y_obs_bj, n_obs_ot, batch_size, eps=1e-10,
         M_obs=M_obs).detach().cpu().numpy()
     return loss
 
+
+
+
+# ==============================================================================
+# New Datasets added for g
+
+class BlackScholesZ(StockModel):
+    """
+    The underlying process is BS, and it creates the Z dataset 
+    """
+    def __init__(self, drift, volatility, nb_paths, 
+                 nb_steps, S0,  # initialize relevant parameters maturity, sine_coeff=None, **kwargs):
+        super(BlackScholesZ, self).__init__(
+            drift=drift, volatility=volatility, nb_paths=nb_paths,
+            nb_steps=nb_steps, S0=S0, maturity=maturity,
+            sine_coeff=sine_coeff
+        )
+
+    def generate_paths(self, start_X=None):
+        drift = lambda x, t: self.drift * self.periodic_coeff(t) * x
+        diffusion = lambda x, t: self.volatility * x
+
+        spot_paths = np.empty(
+            (self.nb_paths, self.dimensions, self.nb_steps + 1))
+        dt = self.dt
+
+        if start_X is not None:
+            spot_paths[:, :, 0] = start_X
+
+        for i in range(self.nb_paths):
+            if start_X is None:
+                spot_paths[i, :, 0] = self.S0
+            for k in range(1, self.nb_steps + 1):
+                random_numbers = np.random.normal(0, 1, self.dimensions)
+                dW = random_numbers * np.sqrt(dt)
+                spot_paths[i, :, k] = (
+                        spot_paths[i, :, k - 1]
+                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
+                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) * dW)
+        # stock_path dimension: [nb_paths, dimension, time_steps]
+        Z = np.zeros((self.nb_paths, self.dimensions, self.dimensions, self.nb_steps+1))
+        last_stock_obs = spot_paths[:,:,0].copy()
+
+        for t in range(1, self.nb_steps+1):
+            diff = spot_paths[:,:,t]-copy.deepcopy(last_stock_obs)
+            diff = diff[:,:,np.newaxis]
+            Z[:,:,:,t] = np.matmul(diff.transpose(0,2,1),diff)
+            last_stock_obs = spot_paths[:,:,t].copy()
+
+        return Z.reshape(self.nb_paths, self.dimensions**2, self.nb_steps+1), dt
+
+class OrnsteinUhlenbeckZ(StockModel): 
+    """ 
+     The underlying process is OU and it creates the Z dataset 
+    """
+    def __init__(self, volatility, nb_paths, nb_steps, S0,
+                 mean, speed, maturity, sine_coeff=None, **kwargs):
+        super(OrnsteinUhlenbeckZ, self).__init__(
+            volatility=volatility, nb_paths=nb_paths, drift=None,
+            nb_steps=nb_steps, S0=S0, maturity=maturity,
+            sine_coeff=sine_coeff
+        )
+        self.mean = mean
+        self.speed = speed
+
+
+    def generate_paths(self, start_X=None):
+        # Diffusion of the variance: dv = -k(v-vinf)*dt + vol*dW
+        drift = lambda x, t: - self.speed * self.periodic_coeff(t) * (x - self.mean)
+        diffusion = lambda x, t: self.volatility
+
+        spot_paths = np.empty(
+            (self.nb_paths, self.dimensions, self.nb_steps + 1))
+        dt = self.dt
+        if start_X is not None:
+            spot_paths[:, :, 0] = start_X
+        for i in range(self.nb_paths):
+            if start_X is None:
+                spot_paths[i, :, 0] = self.S0
+            for k in range(1, self.nb_steps + 1):
+                random_numbers = np.random.normal(0, 1, self.dimensions)
+                dW = random_numbers * np.sqrt(dt)
+                spot_paths[i, :, k] = (
+                        spot_paths[i, :, k - 1]
+                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
+                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) * dW)
+        # stock_path dimension: [nb_paths, dimension, time_steps]
+        Z = np.zeros((self.nb_paths, self.dimensions, self.dimensions, self.nb_steps+1))
+        last_stock_obs = spot_paths[:,:,0].copy()
+
+        for t in range(1, self.nb_steps+1):
+            diff = spot_paths[:,:,t]-copy.deepcopy(last_stock_obs)
+            diff = diff[:,:,np.newaxis]
+            Z[:,:,:,t] = np.matmul(diff.transpose(0,2,1),diff)
+            last_stock_obs = spot_paths[:,:,t].copy()
+
+        return Z.reshape(self.nb_paths, self.dimensions**2, self.nb_steps+1), dt
+
+class OrnsteinUhlenbeckMultiDimensional(StockModel):
+    def __init__(self, volatility, nb_paths, nb_steps, S0,
+                 mean, speed, maturity, dimension, sine_coeff=None, **kwargs):
+        super(OrnsteinUhlenbeckMultiDimensional, self).__init__(
+            volatility=volatility, nb_paths=nb_paths, drift=None,
+            nb_steps=nb_steps, S0=S0, maturity=maturity, dimensions=dimension,
+            sine_coeff=sine_coeff
+        )
+        self.mean = np.array(mean)
+        self.speed = np.array(speed)
+        self.volatility = np.array(volatility)
+        self.dimensions = dimension
+
+    def next_cond_exp(self, y, delta_t, current_t):
+        exp_delta =scipy.linalg.expm(-self.speed * delta_t)
+        return y@exp_delta + self.mean@(np.eye(self.dimensions)-exp_delta)
+
+    def generate_paths(self, start_X=None):
+        # Drift function: -speed * (x - mean)
+        drift = lambda x, t: - self.speed * self.periodic_coeff(t) @ (x - self.mean)
+        
+        # Diffusion function: volatility matrix
+        diffusion = lambda x, t: self.volatility
+
+        spot_paths = np.empty(
+            (self.nb_paths, self.dimensions, self.nb_steps + 1))
+        dt = self.dt
+        if start_X is not None:
+            spot_paths[:, :, 0] = start_X
+            
+        for i in range(self.nb_paths):
+            if start_X is None:
+                spot_paths[i, :, 0] = self.S0
+
+            for k in range(1, self.nb_steps + 1):
+                random_numbers = np.random.normal(0, 1, self.dimensions)
+                dW = random_numbers * np.sqrt(dt)
+                spot_paths[i, :, k] = (
+                        spot_paths[i, :, k - 1]
+                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
+                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) @ dW)
+
+        # stock_path dimension: [nb_paths, dimension, time_steps]
+        return spot_paths, dt
+
+    def compute_cond_exp(self, times, time_ptr, X, obs_idx, delta_t, T, start_X,
+                             n_obs_ot, return_path=True, get_loss=False,
+                             weight=0.5, store_and_use_stored=True,
+                             start_time=None, which_loss="easy",
+                             **kwargs):
+
+        """
+        Compute conditional expectation
+        :param times: np.array, of observation times
+        :param time_ptr: list, start indices of X and obs_idx for a given
+                observation time, first element is 0, this pointer tells how
+                many (and which) of the observations of X along the batch-dim
+                belong to the current time, and obs_idx then tells to which of
+                the batch elements they belong. In particular, not each batch
+                element has to jump at the same time, and only those elements
+                which jump at the current time should be updated with a jump
+        :param X: np.array, data tensor
+        :param obs_idx: list, index of the batch elements where jumps occur at
+                current time
+        :param delta_t: float, time step for Euler
+        :param T: float, the final time
+        :param start_X: np.array, the starting point of X
+        :param n_obs_ot: np.array, the number of observations over the
+                entire time interval for each element of the batch
+        :param return_path: bool, whether to return the path of h
+        :param get_loss: bool, whether to compute the loss, otherwise 0 returned
+        :param until_T: bool, whether to continue until T (for eval) or only
+                until last observation (for training)
+        :param M: None or np.array, if not None: the mask for the data, same
+                size as X, with 0 or 1 entries
+        :return: float (loss), if wanted paths of t and y (np.arrays)
+
+        """
+        if return_path and store_and_use_stored:
+            if get_loss:
+                if self.path_t is not None and self.loss is not None:
+                    return self.loss, self.path_t, self.path_y
+            else:
+                if self.path_t is not None:
+                    return self.loss, self.path_t, self.path_y
+
+        elif store_and_use_stored:
+            if get_loss:
+                if self.loss is not None:
+                    return self.loss
+
+        y = start_X
+        batch_size = start_X.shape[0]
+        current_time = 0.0
+        if start_time:
+            current_time = start_time
+
+        loss = 0
+        if return_path:
+            if start_time:
+                path_t = []
+                path_y = []
+            else:
+                path_t = [0.]
+                path_y = [y]
+
+        for i, obs_time in enumerate(times):
+            # Calculate conditional expectation stepwise
+            while current_time < (obs_time - 1e-10 * delta_t):
+                if current_time < obs_time - delta_t:
+                    delta_t_ = delta_t
+                else:
+                    delta_t_ = obs_time - current_time
+                y = self.next_cond_exp(y, delta_t_, current_time)
+                current_time = current_time + delta_t_
+
+
+                # Storing the conditional expectation
+                if return_path:
+                    path_t.append(current_time)
+                    path_y.append(y)
+
+
+            # Reached an observation - set new interval
+            start = time_ptr[i]
+            end = time_ptr[i + 1]
+            X_obs = X[start:end]
+            i_obs = obs_idx[start:end] 
+
+            # Update h. Also updating loss, tau and last_X
+            Y_bj = y
+            temp = copy.deepcopy(y)
+            temp[i_obs] = X_obs
+            y = temp
+            Y = y
+
+
+            if get_loss:
+                loss = loss + compute_loss(
+                    X_obs=X_obs, Y_obs=Y[i_obs], Y_obs_bj=Y_bj[i_obs],
+                    n_obs_ot=n_obs_ot[i_obs], batch_size=batch_size,
+                    weight=weight, which_loss=which_loss)
+
+            if return_path:
+                path_t.append(obs_time)
+                path_y.append(y)
+
+        # after every observation has been processed, propagating until T
+        while current_time < T - 1e-10 * delta_t:
+            if current_time < T - delta_t:
+                delta_t_ = delta_t
+            else:
+                delta_t_ = T - current_time
+            y = self.next_cond_exp(y, delta_t_, current_time)
+            current_time = current_time + delta_t_
+
+            # Storing the predictions.
+            if return_path:
+                path_t.append(current_time)
+                path_y.append(y)
+
+
+        if get_loss and store_and_use_stored:
+            self.loss = loss
+
+        if return_path and store_and_use_stored:
+            self.path_t = np.array(path_t)
+            self.path_y = np.array(path_y)
+
+        if return_path:
+            # path dimension: [time_steps, batch_size, output_size]
+            return loss, np.array(path_t), np.array(path_y)
+        else:
+            return loss
+
+
+class OrnsteinUhlenbeckMulti_Z(StockModel):
+    def __init__(self, volatility, nb_paths, nb_steps, S0,
+                 mean, speed, maturity, dimension, sine_coeff=None, **kwargs):
+        super(OrnsteinUhlenbeckMulti_Z, self).__init__(
+            volatility=volatility, nb_paths=nb_paths, drift=None,
+            nb_steps=nb_steps, S0=S0, maturity=maturity, dimensions=dimension,
+            sine_coeff=sine_coeff
+        )
+        self.mean = np.array(mean)
+        self.speed = np.array(speed)
+        self.volatility = np.array(volatility)
+        self.dimensions = dimension
+
+ 
+
+    def generate_paths(self, start_X=None):
+        # Drift function: -speed * (x - mean)
+        drift = lambda x, t: - self.speed * self.periodic_coeff(t) @ (x - self.mean)
+
+        # Diffusion function: volatility matrix
+        diffusion = lambda x, t: self.volatility
+
+        spot_paths = np.empty(
+            (self.nb_paths, self.dimensions, self.nb_steps + 1))
+        dt = self.dt
+
+        if start_X is not None:
+            spot_paths[:, :, 0] = start_X
+
+        for i in range(self.nb_paths):
+            if start_X is None:
+                spot_paths[i, :, 0] = self.S0
+
+            for k in range(1, self.nb_steps + 1):
+                random_numbers = np.random.normal(0, 1, self.dimensions)
+                dW = random_numbers * np.sqrt(dt)
+
+                spot_paths[i, :, k] = (
+                        spot_paths[i, :, k - 1]
+                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
+                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) @ dW)
+
+        # stock_path dimension: [nb_paths, dimension, time_steps]
+        Z = create_Z_dataset(spot_paths)
+        Z0 = np.zeros((Z.shape[0], Z.shape[1],1),dtype=Z.dtype)
+        return np.concatenate([Z0,Z],axis=2), dt
 
 # ==============================================================================
 # dict for the supported stock models to get them from their name
@@ -3261,7 +3578,11 @@ DATASETS = {
     "BMwithUncertainDrift": BMwithUncertainDrift,
     "BMandQuantiles": BMandQuantiles,
     "CIRUncertainParams": CIRUncertainParams,
-    "BMClassification": BMClassification,
+    "BMClassification": BMClassification, 
+    "BlackScholesZ": BlackScholesZ, 
+    "OrnsteinUhlenbeckZ":OrnsteinUhlenbeckZ, 
+    "OrnsteinUhlenbeckMultiDimensional":OrnsteinUhlenbeckMultiDimensional, 
+    "OrnsteinUhlenbeckMulti_Z":OrnsteinUhlenbeckMulti_Z
 }
 # ==============================================================================
 
