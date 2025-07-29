@@ -1,6 +1,6 @@
 """
 Author: Azamat Zhaksylykov
-
+configs for 3D OU process 
 """
 
  
@@ -15,7 +15,7 @@ data_path = data_path
 training_data_path = training_data_path
 
  
-# Dataset parameters for Ornstein-Uhlenbeck process for Z_t
+# Dataset parameters for Z 
 vol_dataset_dict = {
     'volatility': np.array([[0.2, 0.1, 0.1], [0.1, 0.25, 0.1], [0.1, 0.1, 0.3]]).tolist(),
     'mean': np.array([1.2, 1.0, 1.5]).tolist(),
@@ -27,13 +27,13 @@ vol_dataset_dict = {
     'dimension': 3,
     'obs_perc': 1.0,
     'scheme': 'euler',
-    'model_name': 'OrnsteinUhlenbeckForZ',
+    'model_name': 'OrnsteinUhlenbeckMulti_Z',
     'dt': 0.01
 }
 
  
 
-# Dataset parameters for Ornstein-Uhlenbeck process for X_t
+# Dataset parameters for X
 mu_dataset_dict = {
     'volatility': np.array([[0.2, 0.1, 0.1], [0.1, 0.25, 0.1], [0.1, 0.1, 0.3]]).tolist(),
     'mean': np.array([1.2, 1.0, 1.5]).tolist(),
@@ -53,10 +53,10 @@ mu_dataset_dict = {
 
  
 
-# Train parameters for for Ornstein-Uhlenbeck process for Z_t
+# Train parameters for Z
 vol_param_dict = {
     'which_loss': ["easy_vol"],
-    'dataset': ['OrnsteinUhlenbeckForZ'],
+    'dataset': ['OrnsteinUhlenbeckMulti_Z'],
     'use_cond_exp': [False],
     'eval_use_true_paths': [True],
     'plot': [True],
@@ -68,7 +68,7 @@ vol_params_list = get_parameter_array(
 
  
 
-# Train parameters for for Ornstein-Uhlenbeck process for X_t
+# Train parameters for X
 mu_param_dict = {
     'which_loss': ["easy"],
     'dataset': ['OrnsteinUhlenbeckMultiDimensional'],
