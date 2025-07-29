@@ -40,7 +40,7 @@ mu_dataset_dict = {
     'S0': 1,
     'maturity': 1.,
     'dimension': 1,
-    'obs_perc': 1.0,
+    'obs_perc': 0.1,
     'scheme': 'euler',
     'return_vol': False,
     'v0': 1,
