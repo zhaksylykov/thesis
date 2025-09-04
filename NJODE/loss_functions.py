@@ -244,80 +244,6 @@ def compute_loss_noisy_obs(
 
     return outer / batch_size
 ​
-Azamat Zhaksylykov​
-def compute_loss_2_vol(X_obs, Y_obs, Y_obs_bj, n_obs_ot, batch_size, eps=1e-10,
-
-                   weight=0.5, M_obs=None):
-
-    """
-
-    similar to compute_loss_2, but it takes Z_t as input not X_t
-
-    """
-
-    if M_obs is None:
-
-        M_obs = 1.
-
- 
-
-    d_2_ob=Y_obs.shape[1]
-
-    d_ob=int(np.sqrt(d_2_ob))
-
-    Y_obs_matrix = Y_obs.view(-1,d_ob,d_ob)
-
-    Y_obs1=torch.matmul(Y_obs_matrix.transpose(1,2),Y_obs_matrix)
-
- 
-
-    d_2_ob_bj=Y_obs_bj.shape[1]
-
-    d_ob_bj=int(np.sqrt(d_2_ob_bj))
-
-    Y_obs_bj_matrix = Y_obs_bj.view(-1,d_ob_bj,d_ob_bj)
-
-    Y_obs_bj1=torch.matmul(Y_obs_bj_matrix.transpose(1,2),Y_obs_bj_matrix)
-
- 
-
-    Y_obs2=Y_obs1.view(-1,d_2_ob)
-
-    Y_obs_bj2=Y_obs_bj1.view(-1,d_2_ob_bj)
-
- 
-
-    # inner = (2*weight * torch.sqrt(
-
-    #    torch.sum(M_obs * (X_obs - Y_obs2) ** 2, dim=1) + eps) +
-
-    #         2*(1 - weight) * torch.sqrt(
-
-    #            torch.sum(M_obs * (Y_obs_bj2 - X_obs) ** 2, dim=1)
-
-    #            + eps)) ** 2
-
-    
-
-    inner = (2*weight * torch.sqrt(
-
-        torch.sum(M_obs * (Y_obs2) ** 2, dim=1) + eps) +
-
-             2*(1 - weight) * torch.sqrt(
-
-                torch.sum(M_obs * (Y_obs_bj2 - X_obs) ** 2, dim=1)
-
-                + eps)) ** 2
-
-    
-
-    #inner = torch.sum(M_obs * (Y_obs_bj2 - X_obs) ** 2)
-
-    outer = torch.sum(inner / n_obs_ot)
-
-    return outer / batch_size
-
-
 def compute_loss_3(
         X_obs, Y_obs, Y_obs_bj, n_obs_ot, batch_size, eps=1e-10,
         weight=0.5, M_obs=None,
@@ -515,7 +441,43 @@ def compute_quantile_jump_loss(quantiles):
 
     return loss
 
+def compute_loss_vola(
+        X_obs, Y_obs, Y_obs_bj, n_obs_ot, batch_size, eps=1e-10,
+        weight=0.5, M_obs=None,
+        compute_variance=None, var_weight=1.,
+        Y_var_bj=None, Y_var=None, dim_to=None, which_var_loss=None, version=1):
+    """
+    similar to compute_loss, but using X_obs also in second part of loss
+    instead of Y_obs -> should make the learning easier
+    """
+    if M_obs is None:
+        M_obs = 1.
 
+    d2 = Y_obs_bj.shape[1]
+    d = int(np.sqrt(d2))
+    Y_obs_bj_mat = Y_obs_bj.view(-1, d, d)
+    Y_obs_bj_mat1 = torch.matmul(Y_obs_bj_mat.transpose(1, 2),Y_obs_bj_mat)
+    Y_obs_bj_mod = Y_obs_bj_mat1.view(-1, d2)
+
+    d2 = Y_obs.shape[1]
+    d = int(np.sqrt(d2))
+    Y_obs_mat = Y_obs.view(-1, d, d)
+    Y_obs_mat1 = torch.matmul(Y_obs_mat.transpose(1, 2),Y_obs_mat)
+    Y_obs_mod = Y_obs_mat1.view(-1, d2)
+
+    if version == 0:
+      inner = (2*weight * torch.sqrt(
+        torch.sum(M_obs * (Y_obs_bj_mod - X_obs) ** 2, dim=1) + eps) +
+              2*(1 - weight) * torch.sqrt(
+                torch.sum(M_obs * (Y_obs_mod) ** 2, dim=1)
+                + eps)) ** 2
+    else:
+        inner = (2*weight*torch.sum(M_obs * (Y_obs_bj_mod - X_obs) ** 2, dim=1)+
+              2*(1 - weight) * torch.sum(M_obs * (Y_obs_mod) ** 2, dim=1))
+
+    outer = torch.sum(inner / n_obs_ot)
+
+    return outer / batch_size
 
 
 LOSS_FUN_DICT = {
@@ -525,7 +487,7 @@ LOSS_FUN_DICT = {
     'standard': compute_loss,
     'easy': compute_loss_2,
     'very_easy': compute_loss_2_1,
-    'easy_vol' : compute_loss_2_vol,
+    'vola': compute_loss_vola,
     'IO': compute_loss_2_1,
     'noisy_obs': compute_loss_noisy_obs,
     'abs': compute_loss_3,
