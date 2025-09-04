@@ -984,6 +984,278 @@ def LOBCollateFnGen2():
     return custom_collate_fn
 
 
+def create_dataset_Z_minus_n_plus_n_X(
+        stock_model_name="BlackScholes",
+        hyperparam_dict=None,
+        seed=0, divide_by_t=False):
+    """
+    Create a synthetic dataset generating process Z using a stock model.
+
+    :param stock_model_name: str, name of the stock model, see _STOCK_MODELS
+    :param hyperparam_dict: dict, contains all needed parameters for the model
+            it can also contain additional options for dataset generation:
+                - masked    None, float or array of floats. if None: no mask is
+                            used; if float: lambda of the poisson distribution;
+                            if array of floats: gives the bernoulli probability
+                            for each coordinate to be observed
+                - obs_noise    dict, if given: add noise to the observations
+                            the dict needs the following keys: 'distribution'
+                            (defining the distribution of the noise), and keys
+                            for the parameters of the distribution (depending on
+                            the used distribution); supported distributions
+                            {'normal'}. Be aware that the noise needs to be
+                            centered for the model to be able to learn the
+                            correct dynamics.
+    :param seed: int, random seed for the generation of the dataset
+    :return: Z_flattened, observed_dates, nb_obs, hyperparam_dict, obs_noise
+             - Z_flattened: array of shape [nb_paths, dim*dim, time_steps],
+                            flattened version of Z_t = (X_t - X_{\tau(t)}) (X_t - X_{\tau(t)})^T
+                            for t >= 1, Z_0 = 0, and \tau(t) is the last observed time before t
+             - observed_dates: observation indicators, shape [nb_paths, time_steps]
+                               if not masked, or [nb_paths, dim, time_steps] if masked
+             - nb_obs: array of shape [nb_paths], number of observed time steps per path (excluding t=0)
+             - hyperparam_dict: updated hyperparameter dictionary
+             - obs_noise: noise array of shape [nb_paths, dim, time_steps] or None
+    """
+    np.random.seed(seed=seed)
+    hyperparam_dict['model_name'] = stock_model_name
+    obs_perc = hyperparam_dict['obs_perc']
+    masked = False
+    masked_lambda = None
+    mask_probs = None
+    if ("masked" in hyperparam_dict
+            and hyperparam_dict['masked'] not in [None, False]):
+        masked = True
+        if isinstance(hyperparam_dict['masked'], float):
+            masked_lambda = hyperparam_dict['masked']
+        elif isinstance(hyperparam_dict['masked'], (tuple, list)):
+            mask_probs = hyperparam_dict['masked']
+            assert len(mask_probs) == hyperparam_dict['dimension']
+        else:
+            raise ValueError("please provide a float (poisson lambda) "
+                             "in hyperparam_dict['masked']")
+
+    stockmodel = DATASETS[stock_model_name](**hyperparam_dict)
+    # stock paths shape: [nb_paths, dim, time_steps]
+    stock_paths, dt = stockmodel.generate_paths()
+    size = stock_paths.shape
+    observed_dates = np.random.random(size=(size[0], size[2]))
+    observed_dates = (observed_dates < obs_perc)*1
+    observed_dates[:, 0] = 1
+    nb_obs = np.sum(observed_dates[:, 1:], axis=1)
+    if masked:
+        mask = np.zeros(shape=size)
+        mask[:,:,0] = 1
+        for i in range(size[0]):
+            for j in range(1, size[2]):
+                if observed_dates[i,j] == 1:
+                    if masked_lambda is not None:
+                        amount = min(1+np.random.poisson(masked_lambda),
+                                     size[1])
+                        observed = np.random.choice(
+                            size[1], amount, replace=False)
+                        mask[i, observed, j] = 1
+                    elif mask_probs is not None:
+                        for k in range(size[1]):
+                            mask[i, k, j] = np.random.binomial(1, mask_probs[k])
+        observed_dates = mask
+    if "obs_noise" in hyperparam_dict:
+        obs_noise_dict = hyperparam_dict["obs_noise"]
+        if obs_noise_dict["distribution"] == "normal":
+            obs_noise = np.random.normal(
+                loc=obs_noise_dict["loc"],
+                scale=obs_noise_dict["scale"],
+                size=size)
+            if 'noise_at_start' in obs_noise_dict and \
+                    obs_noise_dict['noise_at_start']:
+                pass
+            else:
+                obs_noise[:,:,0] = 0
+        else:
+            raise ValueError("obs_noise distribution {} not implemented".format(
+                obs_noise_dict["distribution"]))
+    else:
+        obs_noise = None
+
+    hyperparam_dict['dt'] = dt
+
+    # Compute process Z
+    dim = size[1]
+    nb_paths = size[0]
+    time_steps = size[2]
+    Z = np.zeros((nb_paths, dim, dim, time_steps))
+    Z_obs = np.zeros((nb_paths, dim,dim, time_steps))
+    last_stock_obs = stock_paths[:, :, 0].copy()
+    x_process = stock_paths
+    last_obs_time = np.zeros((nb_paths, dim))
+
+    for t in range(1, time_steps):
+        curr_t = t * dt
+        t_diff = curr_t - last_obs_time
+        # diff = copy.deepcopy((stock_paths[:, :, t] - last_stock_obs)/np.sqrt(t_diff)) 
+        if stock_model_name=="BlackScholes": 
+          diff = copy.deepcopy((stock_paths[:, :, t] - last_stock_obs - (last_stock_obs*(np.exp(t_diff*stockmodel.drift)-1))))
+        elif stock_model_name=="OrnsteinUhlenbeck": 
+          theta = stockmodel.mean
+          kappa = stockmodel.speed
+          exp_decay = np.exp(-kappa * t_diff)
+          expected_X = theta + (last_stock_obs - theta) * exp_decay
+          diff = copy.deepcopy((stock_paths[:, :, t] - last_stock_obs - (expected_X-last_stock_obs)))
+        else: 
+          diff = copy.deepcopy((stock_paths[:, :, t] - last_stock_obs)/np.sqrt(t_diff)) 
+          
+        if divide_by_t:
+            diff = diff/np.sqrt(t_diff)
+
+        diff = diff[:, :, np.newaxis]
+        Z[:, :, :, t] = np.matmul(diff, diff.transpose(0,2,1))
+        Z_obs[:, :,:, t] = Z[:, :, :, t]
+        where_obs = observed_dates[:, t] == 1
+        # TODO: this doesn't work correctly in a masked case
+        last_stock_obs[where_obs] = stock_paths[where_obs, :, t]
+        Z_obs[where_obs, :,:, t] = 0
+        last_obs_time[where_obs] = curr_t
+
+    Z_flattened = Z.reshape(nb_paths, dim*dim, time_steps)
+    Z_obs_flattened = Z_obs.reshape(nb_paths, dim*dim, time_steps)
+
+    return Z_flattened, Z_obs_flattened, x_process, observed_dates, nb_obs, hyperparam_dict, obs_noise
+
+
+def create_dataset_Z_minus(
+        stock_model_name="BlackScholes",
+        hyperparam_dict=None,
+        seed=0):
+
+  (Z_flattened, Z_obs_flattened, x_process, observed_dates, nb_obs,
+   hyperparam_dict, obs_noise) = create_dataset_Z_minus_n_plus_n_X(
+        stock_model_name=stock_model_name,
+        hyperparam_dict=hyperparam_dict,
+        seed=seed)
+
+  return Z_flattened, observed_dates, nb_obs, hyperparam_dict, obs_noise
+
+
+
+def create_dataset_QV_minus_n_plus_n_X(
+        stock_model_name="BlackScholes",
+        hyperparam_dict=None,
+        seed=0):
+    """
+    Create a synthetic dataset generating process quadratic variation (QV)
+    using a stock model.
+
+    :param stock_model_name: str, name of the stock model, see _STOCK_MODELS
+    :param hyperparam_dict: dict, contains all needed parameters for the model
+            it can also contain additional options for dataset generation:
+                - masked    None, float or array of floats. if None: no mask is
+                            used; if float: lambda of the poisson distribution;
+                            if array of floats: gives the bernoulli probability
+                            for each coordinate to be observed
+                - obs_noise    dict, if given: add noise to the observations
+                            the dict needs the following keys: 'distribution'
+                            (defining the distribution of the noise), and keys
+                            for the parameters of the distribution (depending on
+                            the used distribution); supported distributions
+                            {'normal'}. Be aware that the noise needs to be
+                            centered for the model to be able to learn the
+                            correct dynamics.
+    :param seed: int, random seed for the generation of the dataset
+    :return: Z_flattened, observed_dates, nb_obs, hyperparam_dict, obs_noise
+             - Z_flattened: array of shape [nb_paths, dim*dim, time_steps],
+                            flattened version of Z_t = (X_t - X_{\tau(t)}) (X_t - X_{\tau(t)})^T
+                            for t >= 1, Z_0 = 0, and \tau(t) is the last observed time before t
+             - observed_dates: observation indicators, shape [nb_paths, time_steps]
+                               if not masked, or [nb_paths, dim, time_steps] if masked
+             - nb_obs: array of shape [nb_paths], number of observed time steps per path (excluding t=0)
+             - hyperparam_dict: updated hyperparameter dictionary
+             - obs_noise: noise array of shape [nb_paths, dim, time_steps] or None
+    """
+    np.random.seed(seed=seed)
+    hyperparam_dict['model_name'] = stock_model_name
+    obs_perc = hyperparam_dict['obs_perc']
+    masked = False
+    masked_lambda = None
+    mask_probs = None
+    if ("masked" in hyperparam_dict
+            and hyperparam_dict['masked'] not in [None, False]):
+        masked = True
+        if isinstance(hyperparam_dict['masked'], float):
+            masked_lambda = hyperparam_dict['masked']
+        elif isinstance(hyperparam_dict['masked'], (tuple, list)):
+            mask_probs = hyperparam_dict['masked']
+            assert len(mask_probs) == hyperparam_dict['dimension']
+        else:
+            raise ValueError("please provide a float (poisson lambda) "
+                             "in hyperparam_dict['masked']")
+
+    stockmodel = DATASETS[stock_model_name](**hyperparam_dict)
+    # stock paths shape: [nb_paths, dim, time_steps]
+    stock_paths, dt = stockmodel.generate_paths()
+    size = stock_paths.shape
+    observed_dates = np.random.random(size=(size[0], size[2]))
+    observed_dates = (observed_dates < obs_perc)*1
+    observed_dates[:, 0] = 1
+    nb_obs = np.sum(observed_dates[:, 1:], axis=1)
+    if masked:
+        mask = np.zeros(shape=size)
+        mask[:,:,0] = 1
+        for i in range(size[0]):
+            for j in range(1, size[2]):
+                if observed_dates[i,j] == 1:
+                    if masked_lambda is not None:
+                        amount = min(1+np.random.poisson(masked_lambda),
+                                     size[1])
+                        observed = np.random.choice(
+                            size[1], amount, replace=False)
+                        mask[i, observed, j] = 1
+                    elif mask_probs is not None:
+                        for k in range(size[1]):
+                            mask[i, k, j] = np.random.binomial(1, mask_probs[k])
+        observed_dates = mask
+    if "obs_noise" in hyperparam_dict:
+        obs_noise_dict = hyperparam_dict["obs_noise"]
+        if obs_noise_dict["distribution"] == "normal":
+            obs_noise = np.random.normal(
+                loc=obs_noise_dict["loc"],
+                scale=obs_noise_dict["scale"],
+                size=size)
+            if 'noise_at_start' in obs_noise_dict and \
+                    obs_noise_dict['noise_at_start']:
+                pass
+            else:
+                obs_noise[:,:,0] = 0
+        else:
+            raise ValueError("obs_noise distribution {} not implemented".format(
+                obs_noise_dict["distribution"]))
+    else:
+        obs_noise = None
+
+    hyperparam_dict['dt'] = dt
+
+    # Compute process Z
+    dim = size[1]
+    nb_paths = size[0]
+    time_steps = size[2]
+    QV = np.zeros((nb_paths, dim, dim, time_steps))
+    QV_obs = np.zeros((nb_paths, dim,dim, time_steps))
+    x_process = stock_paths
+
+    for t in range(1, time_steps):
+        diff = copy.deepcopy((stock_paths[:, :, t] - stock_paths[:, :, t-1]))
+        diff = diff[:, :, np.newaxis]
+        diff2 = np.matmul(diff, diff.transpose(0,2,1))
+        QV[:, :, :, t] = QV_obs[:, :, :, t-1] + diff2
+        QV_obs[:, :,:, t] = QV[:, :, :, t]
+        where_obs = observed_dates[:, t] == 1
+        # TODO: this doesn't work correctly in a masked case
+        QV_obs[where_obs, :,:, t] = 0
+
+    QV_flattened = QV.reshape(nb_paths, dim*dim, time_steps)
+    QV_obs_flattened = QV_obs.reshape(nb_paths, dim*dim, time_steps)
+
+    return QV_flattened, QV_obs_flattened, x_process, observed_dates, nb_obs, hyperparam_dict, obs_noise
+
 def main(arg):
     """
     function to generate datasets
