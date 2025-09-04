@@ -19,31 +19,6 @@ from loss_functions import LOSS_FUN_DICT
 import matplotlib.animation as animation 
 
 # ==============================================================================
-# Helper functions 
-def create_Z_dataset(X, dt=1):
-
-    X_torch = torch.from_numpy(X)
-    dX = X_torch[:,:,dt:]-X_torch[:,:,:-dt]
-
-    Z=torch.einsum("b i t, b j t -> b i j t", dX, dX)
-    Z_flat = Z.reshape(Z.shape[0], Z.shape[1]*Z.shape[2] , Z.shape[3])
-    return Z_flat.numpy()
-
-def generate_features(X):
-    batch_size, num_features, time_steps = X.shape
-
-    features = [X[:, i, :] for i in range(num_features)]
-    new_features = []
-    new_features.extend(features)
-    new_features.extend([f ** 2 for f in features])
-
-    for combo in itertools.combinations(features, 2):
-        new_features.append(combo[0] * combo[1])
-
-    new_features = np.stack(new_features, axis=1)
-
-    return new_features
-# ==============================================================================
 # CLASSES
 class StockModel:
     """
@@ -3236,198 +3211,80 @@ def compute_loss(X_obs, Y_obs, Y_obs_bj, n_obs_ot, batch_size, eps=1e-10,
 
 
 # ==============================================================================
-# New Datasets added for g
+# New Datasets added 
 
-class BlackScholesZ(StockModel):
+class BlackScholes_Z(StockModel):
     """
-    The underlying process is BS, and it creates the Z dataset 
+    standard Black-Scholes model, see:
+    https://en.wikipedia.org/wiki/Black–Scholes_model
+    https://en.wikipedia.org/wiki/Geometric_Brownian_motion
     """
-    def __init__(self, drift, volatility, nb_paths, 
-                 nb_steps, S0,  # initialize relevant parameters maturity, sine_coeff=None, **kwargs):
-        super(BlackScholesZ, self).__init__(
+
+    def __init__(self, drift, volatility, nb_paths, nb_steps, S0,  # initialize relevant parameters
+                 maturity, sine_coeff=None, **kwargs):
+        super().__init__(
             drift=drift, volatility=volatility, nb_paths=nb_paths,
             nb_steps=nb_steps, S0=S0, maturity=maturity,
             sine_coeff=sine_coeff
         )
 
-    def generate_paths(self, start_X=None):
-        drift = lambda x, t: self.drift * self.periodic_coeff(t) * x
-        diffusion = lambda x, t: self.volatility * x
-
-        spot_paths = np.empty(
-            (self.nb_paths, self.dimensions, self.nb_steps + 1))
-        dt = self.dt
-
-        if start_X is not None:
-            spot_paths[:, :, 0] = start_X
-
-        for i in range(self.nb_paths):
-            if start_X is None:
-                spot_paths[i, :, 0] = self.S0
-            for k in range(1, self.nb_steps + 1):
-                random_numbers = np.random.normal(0, 1, self.dimensions)
-                dW = random_numbers * np.sqrt(dt)
-                spot_paths[i, :, k] = (
-                        spot_paths[i, :, k - 1]
-                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
-                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) * dW)
-        # stock_path dimension: [nb_paths, dimension, time_steps]
-        Z = np.zeros((self.nb_paths, self.dimensions, self.dimensions, self.nb_steps+1))
-        last_stock_obs = spot_paths[:,:,0].copy()
-
-        for t in range(1, self.nb_steps+1):
-            diff = spot_paths[:,:,t]-copy.deepcopy(last_stock_obs)
-            diff = diff[:,:,np.newaxis]
-            Z[:,:,:,t] = np.matmul(diff.transpose(0,2,1),diff)
-            last_stock_obs = spot_paths[:,:,t].copy()
-
-        return Z.reshape(self.nb_paths, self.dimensions**2, self.nb_steps+1), dt
-
-class OrnsteinUhlenbeckZ(StockModel): 
-    """ 
-     The underlying process is OU and it creates the Z dataset 
-    """
-    def __init__(self, volatility, nb_paths, nb_steps, S0,
-                 mean, speed, maturity, sine_coeff=None, **kwargs):
-        super(OrnsteinUhlenbeckZ, self).__init__(
-            volatility=volatility, nb_paths=nb_paths, drift=None,
-            nb_steps=nb_steps, S0=S0, maturity=maturity,
-            sine_coeff=sine_coeff
-        )
-        self.mean = mean
-        self.speed = speed
-
-
-    def generate_paths(self, start_X=None):
-        # Diffusion of the variance: dv = -k(v-vinf)*dt + vol*dW
-        drift = lambda x, t: - self.speed * self.periodic_coeff(t) * (x - self.mean)
-        diffusion = lambda x, t: self.volatility
-
-        spot_paths = np.empty(
-            (self.nb_paths, self.dimensions, self.nb_steps + 1))
-        dt = self.dt
-        if start_X is not None:
-            spot_paths[:, :, 0] = start_X
-        for i in range(self.nb_paths):
-            if start_X is None:
-                spot_paths[i, :, 0] = self.S0
-            for k in range(1, self.nb_steps + 1):
-                random_numbers = np.random.normal(0, 1, self.dimensions)
-                dW = random_numbers * np.sqrt(dt)
-                spot_paths[i, :, k] = (
-                        spot_paths[i, :, k - 1]
-                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
-                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) * dW)
-        # stock_path dimension: [nb_paths, dimension, time_steps]
-        Z = np.zeros((self.nb_paths, self.dimensions, self.dimensions, self.nb_steps+1))
-        last_stock_obs = spot_paths[:,:,0].copy()
-
-        for t in range(1, self.nb_steps+1):
-            diff = spot_paths[:,:,t]-copy.deepcopy(last_stock_obs)
-            diff = diff[:,:,np.newaxis]
-            Z[:,:,:,t] = np.matmul(diff.transpose(0,2,1),diff)
-            last_stock_obs = spot_paths[:,:,t].copy()
-
-        return Z.reshape(self.nb_paths, self.dimensions**2, self.nb_steps+1), dt
-
-class OrnsteinUhlenbeckMultiDimensional(StockModel):
-    def __init__(self, volatility, nb_paths, nb_steps, S0,
-                 mean, speed, maturity, dimension, sine_coeff=None, **kwargs):
-        super(OrnsteinUhlenbeckMultiDimensional, self).__init__(
-            volatility=volatility, nb_paths=nb_paths, drift=None,
-            nb_steps=nb_steps, S0=S0, maturity=maturity, dimensions=dimension,
-            sine_coeff=sine_coeff
-        )
-        self.mean = np.array(mean)
-        self.speed = np.array(speed)
-        self.volatility = np.array(volatility)
-        self.dimensions = dimension
-
-    def next_cond_exp(self, y, delta_t, current_t):
-        exp_delta =scipy.linalg.expm(-self.speed * delta_t)
-        return y@exp_delta + self.mean@(np.eye(self.dimensions)-exp_delta)
-
-    def generate_paths(self, start_X=None):
-        # Drift function: -speed * (x - mean)
-        drift = lambda x, t: - self.speed * self.periodic_coeff(t) @ (x - self.mean)
-        
-        # Diffusion function: volatility matrix
-        diffusion = lambda x, t: self.volatility
-
-        spot_paths = np.empty(
-            (self.nb_paths, self.dimensions, self.nb_steps + 1))
-        dt = self.dt
-        if start_X is not None:
-            spot_paths[:, :, 0] = start_X
-            
-        for i in range(self.nb_paths):
-            if start_X is None:
-                spot_paths[i, :, 0] = self.S0
-
-            for k in range(1, self.nb_steps + 1):
-                random_numbers = np.random.normal(0, 1, self.dimensions)
-                dW = random_numbers * np.sqrt(dt)
-                spot_paths[i, :, k] = (
-                        spot_paths[i, :, k - 1]
-                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
-                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) @ dW)
-
-        # stock_path dimension: [nb_paths, dimension, time_steps]
-        return spot_paths, dt
-
     def compute_cond_exp(self, times, time_ptr, X, obs_idx, delta_t, T, start_X,
-                             n_obs_ot, return_path=True, get_loss=False,
-                             weight=0.5, store_and_use_stored=True,
-                             start_time=None, which_loss="easy",
-                             **kwargs):
-
+                         n_obs_ot, return_path=True, get_loss=False,
+                         weight=0.5, store_and_use_stored=True,
+                         start_time=None, which_loss="easy",
+                         return_var=False,
+                         **kwargs):
         """
-        Compute conditional expectation
-        :param times: np.array, of observation times
-        :param time_ptr: list, start indices of X and obs_idx for a given
-                observation time, first element is 0, this pointer tells how
-                many (and which) of the observations of X along the batch-dim
-                belong to the current time, and obs_idx then tells to which of
-                the batch elements they belong. In particular, not each batch
-                element has to jump at the same time, and only those elements
-                which jump at the current time should be updated with a jump
-        :param X: np.array, data tensor
-        :param obs_idx: list, index of the batch elements where jumps occur at
-                current time
-        :param delta_t: float, time step for Euler
-        :param T: float, the final time
-        :param start_X: np.array, the starting point of X
-        :param n_obs_ot: np.array, the number of observations over the
-                entire time interval for each element of the batch
-        :param return_path: bool, whether to return the path of h
-        :param get_loss: bool, whether to compute the loss, otherwise 0 returned
-        :param until_T: bool, whether to continue until T (for eval) or only
-                until last observation (for training)
-        :param M: None or np.array, if not None: the mask for the data, same
-                size as X, with 0 or 1 entries
+        compute conditional expectation similar to computing the prediction in
+        the model.NJODE.forward
+        ATTENTION: Works correctly only for non-masked data!
+        :param times: see model.NJODE.forward
+        :param time_ptr: see model.NJODE.forward
+        :param X: see model.NJODE.forward, as np.array, assumues to get vector of
+            (Z_plus, Z_minus, X) and that dim=1
+        :param obs_idx: see model.NJODE.forward, as np.array
+        :param delta_t: see model.NJODE.forward, as np.array
+        :param T: see model.NJODE.forward
+        :param start_X: see model.NJODE.forward, as np.array
+        :param n_obs_ot: see model.NJODE.forward, as np.array
+        :param return_path: see model.NJODE.forward
+        :param get_loss: see model.NJODE.forward
+        :param weight: see model.NJODE.forward
+        :param store_and_use_stored: bool, whether the loss, and cond exp path
+            should be stored and reused when calling the function again
+        :param start_time: None or float, if float, this is first time point
+        :param return_var: bool, whether to return the variance additionally to
+                the process; only if self.return_var_implemented is True
+        :param kwargs: unused, to allow for additional unused inputs
         :return: float (loss), if wanted paths of t and y (np.arrays)
-
         """
+        return_var = False
+
         if return_path and store_and_use_stored:
+            res = [self.loss, self.path_t, self.path_y]
+            if return_var:
+                res.append(self.path_var_y)
             if get_loss:
                 if self.path_t is not None and self.loss is not None:
-                    return self.loss, self.path_t, self.path_y
+                    return res
             else:
                 if self.path_t is not None:
-                    return self.loss, self.path_t, self.path_y
-
+                    return res
         elif store_and_use_stored:
             if get_loss:
                 if self.loss is not None:
                     return self.loss
 
-        y = start_X
+        y = start_X[:,0:1] # this is 0 values
+        X_tau_squared = start_X[:,2:3]**2
+        last_obs_time = np.zeros(start_X.shape[0])
         batch_size = start_X.shape[0]
         current_time = 0.0
         if start_time:
             current_time = start_time
 
         loss = 0
+
         if return_path:
             if start_time:
                 path_t = []
@@ -3437,45 +3294,53 @@ class OrnsteinUhlenbeckMultiDimensional(StockModel):
                 path_y = [y]
 
         for i, obs_time in enumerate(times):
+            # the following is needed for the combined stock model datasets
+            if obs_time > T + 1e-10*delta_t:
+                break
+            if obs_time <= current_time:
+                continue
             # Calculate conditional expectation stepwise
-            while current_time < (obs_time - 1e-10 * delta_t):
+            while current_time < (obs_time - 1e-10*delta_t):
                 if current_time < obs_time - delta_t:
                     delta_t_ = delta_t
                 else:
                     delta_t_ = obs_time - current_time
-                y = self.next_cond_exp(y, delta_t_, current_time)
+                y = self.next_cond_exp(
+                    y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
                 current_time = current_time + delta_t_
-
 
                 # Storing the conditional expectation
                 if return_path:
                     path_t.append(current_time)
                     path_y.append(y)
 
-
             # Reached an observation - set new interval
             start = time_ptr[i]
             end = time_ptr[i + 1]
             X_obs = X[start:end]
-            i_obs = obs_idx[start:end] 
+            i_obs = obs_idx[start:end]
 
             # Update h. Also updating loss, tau and last_X
-            Y_bj = y
+            Y_bj = copy.deepcopy(y)
             temp = copy.deepcopy(y)
-            temp[i_obs] = X_obs
+            temp[i_obs] = X_obs[:,0:1] # this is just Z_plus = 0 at the obs time
             y = temp
             Y = y
-
+            last_obs_time[i_obs] = obs_time
+            X_tau_squared[i_obs] = X_obs[:,2:3]**2
 
             if get_loss:
                 loss = loss + compute_loss(
-                    X_obs=X_obs, Y_obs=Y[i_obs], Y_obs_bj=Y_bj[i_obs],
-                    n_obs_ot=n_obs_ot[i_obs], batch_size=batch_size,
-                    weight=weight, which_loss=which_loss)
-
+                    X_obs=X_obs[:,1:2],
+                    Y_obs=Y[i_obs],
+                    Y_obs_bj=Y_bj[i_obs],
+                    n_obs_ot=n_obs_ot[i_obs],
+                    batch_size=batch_size, weight=weight, which_loss=which_loss)
             if return_path:
                 path_t.append(obs_time)
                 path_y.append(y)
+                if return_var:
+                    path_var_y.append(var_y)
 
         # after every observation has been processed, propagating until T
         while current_time < T - 1e-10 * delta_t:
@@ -3483,7 +3348,8 @@ class OrnsteinUhlenbeckMultiDimensional(StockModel):
                 delta_t_ = delta_t
             else:
                 delta_t_ = T - current_time
-            y = self.next_cond_exp(y, delta_t_, current_time)
+            y = self.next_cond_exp(
+                y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
             current_time = current_time + delta_t_
 
             # Storing the predictions.
@@ -3491,67 +3357,890 @@ class OrnsteinUhlenbeckMultiDimensional(StockModel):
                 path_t.append(current_time)
                 path_y.append(y)
 
-
         if get_loss and store_and_use_stored:
             self.loss = loss
-
         if return_path and store_and_use_stored:
             self.path_t = np.array(path_t)
             self.path_y = np.array(path_y)
+            if return_var:
+                self.path_var_y = np.array(path_var_y)
 
         if return_path:
             # path dimension: [time_steps, batch_size, output_size]
-            return loss, np.array(path_t), np.array(path_y)
+            res = [loss, np.array(path_t), np.array(path_y)]
+            if return_var:
+                res.append(np.array(path_var_y))
+            return res
         else:
             return loss
 
-
-class OrnsteinUhlenbeckMulti_Z(StockModel):
-    def __init__(self, volatility, nb_paths, nb_steps, S0,
-                 mean, speed, maturity, dimension, sine_coeff=None, **kwargs):
-        super(OrnsteinUhlenbeckMulti_Z, self).__init__(
-            volatility=volatility, nb_paths=nb_paths, drift=None,
-            nb_steps=nb_steps, S0=S0, maturity=maturity, dimensions=dimension,
-            sine_coeff=sine_coeff
-        )
-        self.mean = np.array(mean)
-        self.speed = np.array(speed)
-        self.volatility = np.array(volatility)
-        self.dimensions = dimension
-
- 
+    def next_cond_exp(self, y, delta_t, current_t, last_obs_time, X_tau_squared):
+        tdiff = (current_t - last_obs_time).reshape((-1,1))
+        e = np.exp(self.drift * tdiff)
+        e2 = np.exp(2 * self.drift * tdiff + 3*self.volatility**2*tdiff)
+        cond_exp_Z = X_tau_squared * (e2 - 2*e + 1)
+        sqrt_cond_exp = np.sqrt(cond_exp_Z) # np.sqrt(cond_exp_Z/tdiff)
+        return sqrt_cond_exp
 
     def generate_paths(self, start_X=None):
-        # Drift function: -speed * (x - mean)
-        drift = lambda x, t: - self.speed * self.periodic_coeff(t) @ (x - self.mean)
+        raise NotImplementedError  
 
-        # Diffusion function: volatility matrix
-        diffusion = lambda x, t: self.volatility
+class BlackScholes_Z_CV(StockModel):
+    """
+    standard Black-Scholes model, see:
+    https://en.wikipedia.org/wiki/Black–Scholes_model
+    https://en.wikipedia.org/wiki/Geometric_Brownian_motion
+    """
 
-        spot_paths = np.empty(
-            (self.nb_paths, self.dimensions, self.nb_steps + 1))
-        dt = self.dt
+    def __init__(self, drift, volatility, nb_paths, nb_steps, S0,  # initialize relevant parameters
+                 maturity, sine_coeff=None, **kwargs):
+        super().__init__(
+            drift=drift, volatility=volatility, nb_paths=nb_paths,
+            nb_steps=nb_steps, S0=S0, maturity=maturity,
+            sine_coeff=sine_coeff
+        )
 
-        if start_X is not None:
-            spot_paths[:, :, 0] = start_X
+    def compute_cond_exp(self, times, time_ptr, X, obs_idx, delta_t, T, start_X,
+                         n_obs_ot, return_path=True, get_loss=False,
+                         weight=0.5, store_and_use_stored=True,
+                         start_time=None, which_loss="easy",
+                         return_var=False,
+                         **kwargs):
+        """
+        compute conditional expectation similar to computing the prediction in
+        the model.NJODE.forward
+        ATTENTION: Works correctly only for non-masked data!
+        :param times: see model.NJODE.forward
+        :param time_ptr: see model.NJODE.forward
+        :param X: see model.NJODE.forward, as np.array, assumues to get vector of
+            (Z_plus, Z_minus, X) and that dim=1
+        :param obs_idx: see model.NJODE.forward, as np.array
+        :param delta_t: see model.NJODE.forward, as np.array
+        :param T: see model.NJODE.forward
+        :param start_X: see model.NJODE.forward, as np.array
+        :param n_obs_ot: see model.NJODE.forward, as np.array
+        :param return_path: see model.NJODE.forward
+        :param get_loss: see model.NJODE.forward
+        :param weight: see model.NJODE.forward
+        :param store_and_use_stored: bool, whether the loss, and cond exp path
+            should be stored and reused when calling the function again
+        :param start_time: None or float, if float, this is first time point
+        :param return_var: bool, whether to return the variance additionally to
+                the process; only if self.return_var_implemented is True
+        :param kwargs: unused, to allow for additional unused inputs
+        :return: float (loss), if wanted paths of t and y (np.arrays)
+        """
+        return_var = False
 
-        for i in range(self.nb_paths):
-            if start_X is None:
-                spot_paths[i, :, 0] = self.S0
+        if return_path and store_and_use_stored:
+            res = [self.loss, self.path_t, self.path_y]
+            if return_var:
+                res.append(self.path_var_y)
+            if get_loss:
+                if self.path_t is not None and self.loss is not None:
+                    return res
+            else:
+                if self.path_t is not None:
+                    return res
+        elif store_and_use_stored:
+            if get_loss:
+                if self.loss is not None:
+                    return self.loss
 
-            for k in range(1, self.nb_steps + 1):
-                random_numbers = np.random.normal(0, 1, self.dimensions)
-                dW = random_numbers * np.sqrt(dt)
+        y = start_X[:,0:1] # this is 0 values
+        X_tau_squared = start_X[:,2:3]**2
+        last_obs_time = np.zeros(start_X.shape[0])
+        batch_size = start_X.shape[0]
+        current_time = 0.0
+        if start_time:
+            current_time = start_time
 
-                spot_paths[i, :, k] = (
-                        spot_paths[i, :, k - 1]
-                        + drift(spot_paths[i, :, k - 1], (k - 1) * dt) * dt
-                        + diffusion(spot_paths[i, :, k - 1], (k) * dt) @ dW)
+        loss = 0
 
-        # stock_path dimension: [nb_paths, dimension, time_steps]
-        Z = create_Z_dataset(spot_paths)
-        Z0 = np.zeros((Z.shape[0], Z.shape[1],1),dtype=Z.dtype)
-        return np.concatenate([Z0,Z],axis=2), dt
+        if return_path:
+            if start_time:
+                path_t = []
+                path_y = []
+            else:
+                path_t = [0.]
+                path_y = [y]
+
+        for i, obs_time in enumerate(times):
+            # the following is needed for the combined stock model datasets
+            if obs_time > T + 1e-10*delta_t:
+                break
+            if obs_time <= current_time:
+                continue
+            # Calculate conditional expectation stepwise
+            while current_time < (obs_time - 1e-10*delta_t):
+                if current_time < obs_time - delta_t:
+                    delta_t_ = delta_t
+                else:
+                    delta_t_ = obs_time - current_time
+                y = self.next_cond_exp(
+                    y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+                current_time = current_time + delta_t_
+
+                # Storing the conditional expectation
+                if return_path:
+                    path_t.append(current_time)
+                    path_y.append(y)
+
+            # Reached an observation - set new interval
+            start = time_ptr[i]
+            end = time_ptr[i + 1]
+            X_obs = X[start:end]
+            i_obs = obs_idx[start:end]
+
+            # Update h. Also updating loss, tau and last_X
+            Y_bj = copy.deepcopy(y)
+            temp = copy.deepcopy(y)
+            temp[i_obs] = X_obs[:,0:1] # this is just Z_plus = 0 at the obs time
+            y = temp
+            Y = y
+            last_obs_time[i_obs] = obs_time
+            X_tau_squared[i_obs] = X_obs[:,2:3]**2
+
+            if get_loss:
+                loss = loss + compute_loss(
+                    X_obs=X_obs[:,1:2],
+                    Y_obs=Y[i_obs],
+                    Y_obs_bj=Y_bj[i_obs],
+                    n_obs_ot=n_obs_ot[i_obs],
+                    batch_size=batch_size, weight=weight, which_loss=which_loss)
+            if return_path:
+                path_t.append(obs_time)
+                path_y.append(y)
+                if return_var:
+                    path_var_y.append(var_y)
+
+        # after every observation has been processed, propagating until T
+        while current_time < T - 1e-10 * delta_t:
+            if current_time < T - delta_t:
+                delta_t_ = delta_t
+            else:
+                delta_t_ = T - current_time
+            y = self.next_cond_exp(
+                y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+            current_time = current_time + delta_t_
+
+            # Storing the predictions.
+            if return_path:
+                path_t.append(current_time)
+                path_y.append(y)
+
+        if get_loss and store_and_use_stored:
+            self.loss = loss
+        if return_path and store_and_use_stored:
+            self.path_t = np.array(path_t)
+            self.path_y = np.array(path_y)
+            if return_var:
+                self.path_var_y = np.array(path_var_y)
+
+        if return_path:
+            # path dimension: [time_steps, batch_size, output_size]
+            res = [loss, np.array(path_t), np.array(path_y)]
+            if return_var:
+                res.append(np.array(path_var_y))
+            return res
+        else:
+            return loss
+
+    def next_cond_exp(self, y, delta_t, current_t, last_obs_time, X_tau_squared):
+        tdiff = (current_t - last_obs_time).reshape((-1,1))
+        e2 = np.exp(2 * self.drift * tdiff) * (np.exp(self.volatility**2 * tdiff)-1)
+        cond_var_X = X_tau_squared * e2
+        sqrt_cond_exp = np.sqrt(cond_var_X/tdiff)
+        return sqrt_cond_exp
+
+    def generate_paths(self, start_X=None):
+        raise NotImplementedError
+
+
+class BlackScholes_QV(StockModel):
+    """
+    standard Black-Scholes model, see:
+    https://en.wikipedia.org/wiki/Black–Scholes_model
+    https://en.wikipedia.org/wiki/Geometric_Brownian_motion
+    """
+
+    def __init__(self, drift, volatility, nb_paths, nb_steps, S0,  # initialize relevant parameters
+                 maturity, sine_coeff=None, **kwargs):
+        super().__init__(
+            drift=drift, volatility=volatility, nb_paths=nb_paths,
+            nb_steps=nb_steps, S0=S0, maturity=maturity,
+            sine_coeff=sine_coeff
+        )
+
+    def compute_cond_exp(self, times, time_ptr, X, obs_idx, delta_t, T, start_X,
+                         n_obs_ot, return_path=True, get_loss=False,
+                         weight=0.5, store_and_use_stored=True,
+                         start_time=None, which_loss="easy",
+                         return_var=False,
+                         **kwargs):
+        """
+        compute conditional expectation similar to computing the prediction in
+        the model.NJODE.forward
+        ATTENTION: Works correctly only for non-masked data!
+        :param times: see model.NJODE.forward
+        :param time_ptr: see model.NJODE.forward
+        :param X: see model.NJODE.forward, as np.array, assumues to get vector of
+            (Z_plus, Z_minus, X) and that dim=1
+        :param obs_idx: see model.NJODE.forward, as np.array
+        :param delta_t: see model.NJODE.forward, as np.array
+        :param T: see model.NJODE.forward
+        :param start_X: see model.NJODE.forward, as np.array
+        :param n_obs_ot: see model.NJODE.forward, as np.array
+        :param return_path: see model.NJODE.forward
+        :param get_loss: see model.NJODE.forward
+        :param weight: see model.NJODE.forward
+        :param store_and_use_stored: bool, whether the loss, and cond exp path
+            should be stored and reused when calling the function again
+        :param start_time: None or float, if float, this is first time point
+        :param return_var: bool, whether to return the variance additionally to
+                the process; only if self.return_var_implemented is True
+        :param kwargs: unused, to allow for additional unused inputs
+        :return: float (loss), if wanted paths of t and y (np.arrays)
+        """
+        return_var = False
+
+        if return_path and store_and_use_stored:
+            res = [self.loss, self.path_t, self.path_y]
+            if return_var:
+                res.append(self.path_var_y)
+            if get_loss:
+                if self.path_t is not None and self.loss is not None:
+                    return res
+            else:
+                if self.path_t is not None:
+                    return res
+        elif store_and_use_stored:
+            if get_loss:
+                if self.loss is not None:
+                    return self.loss
+
+        y = start_X[:,0:1] # this is 0 values
+        X_tau_squared = start_X[:,2:3]**2
+        last_obs_time = np.zeros(start_X.shape[0])
+        batch_size = start_X.shape[0]
+        current_time = 0.0
+        if start_time:
+            current_time = start_time
+
+        loss = 0
+
+        if return_path:
+            if start_time:
+                path_t = []
+                path_y = []
+            else:
+                path_t = [0.]
+                path_y = [y]
+
+        for i, obs_time in enumerate(times):
+            # the following is needed for the combined stock model datasets
+            if obs_time > T + 1e-10*delta_t:
+                break
+            if obs_time <= current_time:
+                continue
+            # Calculate conditional expectation stepwise
+            while current_time < (obs_time - 1e-10*delta_t):
+                if current_time < obs_time - delta_t:
+                    delta_t_ = delta_t
+                else:
+                    delta_t_ = obs_time - current_time
+                y = self.next_cond_exp(
+                    y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+                current_time = current_time + delta_t_
+
+                # Storing the conditional expectation
+                if return_path:
+                    path_t.append(current_time)
+                    path_y.append(y)
+
+            # Reached an observation - set new interval
+            start = time_ptr[i]
+            end = time_ptr[i + 1]
+            X_obs = X[start:end]
+            i_obs = obs_idx[start:end]
+
+            # Update h. Also updating loss, tau and last_X
+            Y_bj = copy.deepcopy(y)
+            temp = copy.deepcopy(y)
+            temp[i_obs] = X_obs[:,0:1] # this is just Z_plus = 0 at the obs time
+            y = temp
+            Y = y
+            last_obs_time[i_obs] = obs_time
+            X_tau_squared[i_obs] = X_obs[:,2:3]**2
+
+            if get_loss:
+                loss = loss + compute_loss(
+                    X_obs=X_obs[:,1:2],
+                    Y_obs=Y[i_obs],
+                    Y_obs_bj=Y_bj[i_obs],
+                    n_obs_ot=n_obs_ot[i_obs],
+                    batch_size=batch_size, weight=weight, which_loss=which_loss)
+            if return_path:
+                path_t.append(obs_time)
+                path_y.append(y)
+                if return_var:
+                    path_var_y.append(var_y)
+
+        # after every observation has been processed, propagating until T
+        while current_time < T - 1e-10 * delta_t:
+            if current_time < T - delta_t:
+                delta_t_ = delta_t
+            else:
+                delta_t_ = T - current_time
+            y = self.next_cond_exp(
+                y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+            current_time = current_time + delta_t_
+
+            # Storing the predictions.
+            if return_path:
+                path_t.append(current_time)
+                path_y.append(y)
+
+        if get_loss and store_and_use_stored:
+            self.loss = loss
+        if return_path and store_and_use_stored:
+            self.path_t = np.array(path_t)
+            self.path_y = np.array(path_y)
+            if return_var:
+                self.path_var_y = np.array(path_var_y)
+
+        if return_path:
+            # path dimension: [time_steps, batch_size, output_size]
+            res = [loss, np.array(path_t), np.array(path_y)]
+            if return_var:
+                res.append(np.array(path_var_y))
+            return res
+        else:
+            return loss
+
+    def next_cond_exp(self, y, delta_t, current_t, last_obs_time, X_tau_squared):
+        tdiff = (current_t - last_obs_time).reshape((-1,1))
+        approx_cond_exp = self.volatility**2 * tdiff * X_tau_squared
+        sqrt_cond_exp = np.sqrt(approx_cond_exp)
+        return sqrt_cond_exp
+
+    def generate_paths(self, start_X=None):
+        raise NotImplementedError
+
+class OrnsteinUhlenbeck_Z(StockModel):
+    """
+    Ornstein-Uhlenbeeck stock model, see:
+    https://en.wikipedia.org/wiki/Ornstein–Uhlenbeck_process
+    """
+
+    def __init__(self, volatility, nb_paths, nb_steps, S0,  # initialize relevant parameters
+                 mean, speed, maturity, sine_coeff=None, **kwargs):
+        super().__init__(
+            volatility=volatility, nb_paths=nb_paths, drift=None,
+            nb_steps=nb_steps, S0=S0, maturity=maturity,
+            sine_coeff=sine_coeff
+        )
+        self.mean = mean
+        self.speed = speed
+
+    def compute_cond_exp(self, times, time_ptr, X, obs_idx, delta_t, T, start_X,
+                         n_obs_ot, return_path=True, get_loss=False,
+                         weight=0.5, store_and_use_stored=True,
+                         start_time=None, which_loss="easy",
+                         return_var=False,
+                         **kwargs):
+        """
+        compute conditional expectation similar to computing the prediction in
+        the model.NJODE.forward
+        ATTENTION: Works correctly only for non-masked data!
+        :param times: see model.NJODE.forward
+        :param time_ptr: see model.NJODE.forward
+        :param X: see model.NJODE.forward, as np.array, assumues to get vector of
+            (Z_plus, Z_minus, X) and that dim=1
+        :param obs_idx: see model.NJODE.forward, as np.array
+        :param delta_t: see model.NJODE.forward, as np.array
+        :param T: see model.NJODE.forward
+        :param start_X: see model.NJODE.forward, as np.array
+        :param n_obs_ot: see model.NJODE.forward, as np.array
+        :param return_path: see model.NJODE.forward
+        :param get_loss: see model.NJODE.forward
+        :param weight: see model.NJODE.forward
+        :param store_and_use_stored: bool, whether the loss, and cond exp path
+            should be stored and reused when calling the function again
+        :param start_time: None or float, if float, this is first time point
+        :param return_var: bool, whether to return the variance additionally to
+                the process; only if self.return_var_implemented is True
+        :param kwargs: unused, to allow for additional unused inputs
+        :return: float (loss), if wanted paths of t and y (np.arrays)
+        """
+        return_var = False
+
+        if return_path and store_and_use_stored:
+            res = [self.loss, self.path_t, self.path_y]
+            if return_var:
+                res.append(self.path_var_y)
+            if get_loss:
+                if self.path_t is not None and self.loss is not None:
+                    return res
+            else:
+                if self.path_t is not None:
+                    return res
+        elif store_and_use_stored:
+            if get_loss:
+                if self.loss is not None:
+                    return self.loss
+
+        y = start_X[:,0:1] # this is 0 values
+        X_tau_squared = start_X[:,2:3]**2
+        last_obs_time = np.zeros(start_X.shape[0])
+        batch_size = start_X.shape[0]
+        current_time = 0.0
+        if start_time:
+            current_time = start_time
+
+        loss = 0
+
+        if return_path:
+            if start_time:
+                path_t = []
+                path_y = []
+            else:
+                path_t = [0.]
+                path_y = [y]
+
+        for i, obs_time in enumerate(times):
+            # the following is needed for the combined stock model datasets
+            if obs_time > T + 1e-10*delta_t:
+                break
+            if obs_time <= current_time:
+                continue
+            # Calculate conditional expectation stepwise
+            while current_time < (obs_time - 1e-10*delta_t):
+                if current_time < obs_time - delta_t:
+                    delta_t_ = delta_t
+                else:
+                    delta_t_ = obs_time - current_time
+                y = self.next_cond_exp(
+                    y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+                current_time = current_time + delta_t_
+
+                # Storing the conditional expectation
+                if return_path:
+                    path_t.append(current_time)
+                    path_y.append(y)
+
+            # Reached an observation - set new interval
+            start = time_ptr[i]
+            end = time_ptr[i + 1]
+            X_obs = X[start:end]
+            i_obs = obs_idx[start:end]
+
+            # Update h. Also updating loss, tau and last_X
+            Y_bj = copy.deepcopy(y)
+            temp = copy.deepcopy(y)
+            temp[i_obs] = X_obs[:,0:1] # this is just Z_plus = 0 at the obs time
+            y = temp
+            Y = y
+            last_obs_time[i_obs] = obs_time
+            X_tau_squared[i_obs] = X_obs[:,2:3]**2
+
+            if get_loss:
+                loss = loss + compute_loss(
+                    X_obs=X_obs[:,1:2],
+                    Y_obs=Y[i_obs],
+                    Y_obs_bj=Y_bj[i_obs],
+                    n_obs_ot=n_obs_ot[i_obs],
+                    batch_size=batch_size, weight=weight, which_loss=which_loss)
+            if return_path:
+                path_t.append(obs_time)
+                path_y.append(y)
+                if return_var:
+                    path_var_y.append(var_y)
+
+        # after every observation has been processed, propagating until T
+        while current_time < T - 1e-10 * delta_t:
+            if current_time < T - delta_t:
+                delta_t_ = delta_t
+            else:
+                delta_t_ = T - current_time
+            y = self.next_cond_exp(
+                y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+            current_time = current_time + delta_t_
+
+            # Storing the predictions.
+            if return_path:
+                path_t.append(current_time)
+                path_y.append(y)
+
+        if get_loss and store_and_use_stored:
+            self.loss = loss
+        if return_path and store_and_use_stored:
+            self.path_t = np.array(path_t)
+            self.path_y = np.array(path_y)
+            if return_var:
+                self.path_var_y = np.array(path_var_y)
+
+        if return_path:
+            # path dimension: [time_steps, batch_size, output_size]
+            res = [loss, np.array(path_t), np.array(path_y)]
+            if return_var:
+                res.append(np.array(path_var_y))
+            return res
+        else:
+            return loss
+
+    def next_cond_exp(self, y, delta_t, current_t, last_obs_time, X_tau_squared):
+        tdiff = (current_t - last_obs_time).reshape((-1, 1))
+        var_cond = (self.volatility**2 / (2 * self.speed)) * (1 - np.exp(-2 * self.speed * tdiff))
+        return np.sqrt(var_cond)
+
+    def generate_paths(self, start_X=None):
+        raise NotImplementedError
+
+
+class OrnsteinUhlenbeck_Z_CV(StockModel):
+    """
+    Ornstein-Uhlenbeeck stock model, see:
+    https://en.wikipedia.org/wiki/Ornstein–Uhlenbeck_process
+    """
+
+    def __init__(self, volatility, nb_paths, nb_steps, S0,  # initialize relevant parameters
+                 mean, speed, maturity, sine_coeff=None, **kwargs):
+        super().__init__(
+            volatility=volatility, nb_paths=nb_paths, drift=None,
+            nb_steps=nb_steps, S0=S0, maturity=maturity,
+            sine_coeff=sine_coeff
+        )
+        self.mean = mean
+        self.speed = speed
+
+    def compute_cond_exp(self, times, time_ptr, X, obs_idx, delta_t, T, start_X,
+                         n_obs_ot, return_path=True, get_loss=False,
+                         weight=0.5, store_and_use_stored=True,
+                         start_time=None, which_loss="easy",
+                         return_var=False,
+                         **kwargs):
+        """
+        compute conditional expectation similar to computing the prediction in
+        the model.NJODE.forward
+        ATTENTION: Works correctly only for non-masked data!
+        :param times: see model.NJODE.forward
+        :param time_ptr: see model.NJODE.forward
+        :param X: see model.NJODE.forward, as np.array, assumues to get vector of
+            (Z_plus, Z_minus, X) and that dim=1
+        :param obs_idx: see model.NJODE.forward, as np.array
+        :param delta_t: see model.NJODE.forward, as np.array
+        :param T: see model.NJODE.forward
+        :param start_X: see model.NJODE.forward, as np.array
+        :param n_obs_ot: see model.NJODE.forward, as np.array
+        :param return_path: see model.NJODE.forward
+        :param get_loss: see model.NJODE.forward
+        :param weight: see model.NJODE.forward
+        :param store_and_use_stored: bool, whether the loss, and cond exp path
+            should be stored and reused when calling the function again
+        :param start_time: None or float, if float, this is first time point
+        :param return_var: bool, whether to return the variance additionally to
+                the process; only if self.return_var_implemented is True
+        :param kwargs: unused, to allow for additional unused inputs
+        :return: float (loss), if wanted paths of t and y (np.arrays)
+        """
+        return_var = False
+
+        if return_path and store_and_use_stored:
+            res = [self.loss, self.path_t, self.path_y]
+            if return_var:
+                res.append(self.path_var_y)
+            if get_loss:
+                if self.path_t is not None and self.loss is not None:
+                    return res
+            else:
+                if self.path_t is not None:
+                    return res
+        elif store_and_use_stored:
+            if get_loss:
+                if self.loss is not None:
+                    return self.loss
+
+        y = start_X[:,0:1] # this is 0 values
+        X_tau_squared = start_X[:,2:3]**2
+        last_obs_time = np.zeros(start_X.shape[0])
+        batch_size = start_X.shape[0]
+        current_time = 0.0
+        if start_time:
+            current_time = start_time
+
+        loss = 0
+
+        if return_path:
+            if start_time:
+                path_t = []
+                path_y = []
+            else:
+                path_t = [0.]
+                path_y = [y]
+
+        for i, obs_time in enumerate(times):
+            # the following is needed for the combined stock model datasets
+            if obs_time > T + 1e-10*delta_t:
+                break
+            if obs_time <= current_time:
+                continue
+            # Calculate conditional expectation stepwise
+            while current_time < (obs_time - 1e-10*delta_t):
+                if current_time < obs_time - delta_t:
+                    delta_t_ = delta_t
+                else:
+                    delta_t_ = obs_time - current_time
+                y = self.next_cond_exp(
+                    y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+                current_time = current_time + delta_t_
+
+                # Storing the conditional expectation
+                if return_path:
+                    path_t.append(current_time)
+                    path_y.append(y)
+
+            # Reached an observation - set new interval
+            start = time_ptr[i]
+            end = time_ptr[i + 1]
+            X_obs = X[start:end]
+            i_obs = obs_idx[start:end]
+
+            # Update h. Also updating loss, tau and last_X
+            Y_bj = copy.deepcopy(y)
+            temp = copy.deepcopy(y)
+            temp[i_obs] = X_obs[:,0:1] # this is just Z_plus = 0 at the obs time
+            y = temp
+            Y = y
+            last_obs_time[i_obs] = obs_time
+            X_tau_squared[i_obs] = X_obs[:,2:3]**2
+
+            if get_loss:
+                loss = loss + compute_loss(
+                    X_obs=X_obs[:,1:2],
+                    Y_obs=Y[i_obs],
+                    Y_obs_bj=Y_bj[i_obs],
+                    n_obs_ot=n_obs_ot[i_obs],
+                    batch_size=batch_size, weight=weight, which_loss=which_loss)
+            if return_path:
+                path_t.append(obs_time)
+                path_y.append(y)
+                if return_var:
+                    path_var_y.append(var_y)
+
+        # after every observation has been processed, propagating until T
+        while current_time < T - 1e-10 * delta_t:
+            if current_time < T - delta_t:
+                delta_t_ = delta_t
+            else:
+                delta_t_ = T - current_time
+            y = self.next_cond_exp(
+                y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+            current_time = current_time + delta_t_
+
+            # Storing the predictions.
+            if return_path:
+                path_t.append(current_time)
+                path_y.append(y)
+
+        if get_loss and store_and_use_stored:
+            self.loss = loss
+        if return_path and store_and_use_stored:
+            self.path_t = np.array(path_t)
+            self.path_y = np.array(path_y)
+            if return_var:
+                self.path_var_y = np.array(path_var_y)
+
+        if return_path:
+            # path dimension: [time_steps, batch_size, output_size]
+            res = [loss, np.array(path_t), np.array(path_y)]
+            if return_var:
+                res.append(np.array(path_var_y))
+            return res
+        else:
+            return loss
+
+    def next_cond_exp(self, y, delta_t, current_t, last_obs_time, X_tau_squared):
+        tdiff = (current_t - last_obs_time).reshape((-1, 1))
+        var_cond = (self.volatility**2 / (2 * self.speed)) * (1 - np.exp(-2 * self.speed * tdiff))
+        sqrt_cond_exp = np.sqrt(var_cond/tdiff)
+        return sqrt_cond_exp
+
+    def generate_paths(self, start_X=None):
+        raise NotImplementedError
+
+
+class OrnsteinUhlenbeck_QV(StockModel):
+    """
+    Ornstein-Uhlenbeeck stock model, see:
+    https://en.wikipedia.org/wiki/Ornstein–Uhlenbeck_process
+    """
+
+    def __init__(self, volatility, nb_paths, nb_steps, S0,  # initialize relevant parameters
+                 mean, speed, maturity, sine_coeff=None, **kwargs):
+        super().__init__(
+            volatility=volatility, nb_paths=nb_paths, drift=None,
+            nb_steps=nb_steps, S0=S0, maturity=maturity,
+            sine_coeff=sine_coeff
+        )
+        self.mean = mean
+        self.speed = speed
+
+    def compute_cond_exp(self, times, time_ptr, X, obs_idx, delta_t, T, start_X,
+                         n_obs_ot, return_path=True, get_loss=False,
+                         weight=0.5, store_and_use_stored=True,
+                         start_time=None, which_loss="easy",
+                         return_var=False,
+                         **kwargs):
+        """
+        compute conditional expectation similar to computing the prediction in
+        the model.NJODE.forward
+        ATTENTION: Works correctly only for non-masked data!
+        :param times: see model.NJODE.forward
+        :param time_ptr: see model.NJODE.forward
+        :param X: see model.NJODE.forward, as np.array, assumues to get vector of
+            (Z_plus, Z_minus, X) and that dim=1
+        :param obs_idx: see model.NJODE.forward, as np.array
+        :param delta_t: see model.NJODE.forward, as np.array
+        :param T: see model.NJODE.forward
+        :param start_X: see model.NJODE.forward, as np.array
+        :param n_obs_ot: see model.NJODE.forward, as np.array
+        :param return_path: see model.NJODE.forward
+        :param get_loss: see model.NJODE.forward
+        :param weight: see model.NJODE.forward
+        :param store_and_use_stored: bool, whether the loss, and cond exp path
+            should be stored and reused when calling the function again
+        :param start_time: None or float, if float, this is first time point
+        :param return_var: bool, whether to return the variance additionally to
+                the process; only if self.return_var_implemented is True
+        :param kwargs: unused, to allow for additional unused inputs
+        :return: float (loss), if wanted paths of t and y (np.arrays)
+        """
+        return_var = False
+
+        if return_path and store_and_use_stored:
+            res = [self.loss, self.path_t, self.path_y]
+            if return_var:
+                res.append(self.path_var_y)
+            if get_loss:
+                if self.path_t is not None and self.loss is not None:
+                    return res
+            else:
+                if self.path_t is not None:
+                    return res
+        elif store_and_use_stored:
+            if get_loss:
+                if self.loss is not None:
+                    return self.loss
+
+        y = start_X[:,0:1] # this is 0 values
+        X_tau_squared = start_X[:,2:3]**2
+        last_obs_time = np.zeros(start_X.shape[0])
+        batch_size = start_X.shape[0]
+        current_time = 0.0
+        if start_time:
+            current_time = start_time
+
+        loss = 0
+
+        if return_path:
+            if start_time:
+                path_t = []
+                path_y = []
+            else:
+                path_t = [0.]
+                path_y = [y]
+
+        for i, obs_time in enumerate(times):
+            # the following is needed for the combined stock model datasets
+            if obs_time > T + 1e-10*delta_t:
+                break
+            if obs_time <= current_time:
+                continue
+            # Calculate conditional expectation stepwise
+            while current_time < (obs_time - 1e-10*delta_t):
+                if current_time < obs_time - delta_t:
+                    delta_t_ = delta_t
+                else:
+                    delta_t_ = obs_time - current_time
+                y = self.next_cond_exp(
+                    y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+                current_time = current_time + delta_t_
+
+                # Storing the conditional expectation
+                if return_path:
+                    path_t.append(current_time)
+                    path_y.append(y)
+
+            # Reached an observation - set new interval
+            start = time_ptr[i]
+            end = time_ptr[i + 1]
+            X_obs = X[start:end]
+            i_obs = obs_idx[start:end]
+
+            # Update h. Also updating loss, tau and last_X
+            Y_bj = copy.deepcopy(y)
+            temp = copy.deepcopy(y)
+            temp[i_obs] = X_obs[:,0:1] # this is just Z_plus = 0 at the obs time
+            y = temp
+            Y = y
+            last_obs_time[i_obs] = obs_time
+            X_tau_squared[i_obs] = X_obs[:,2:3]**2
+
+            if get_loss:
+                loss = loss + compute_loss(
+                    X_obs=X_obs[:,1:2],
+                    Y_obs=Y[i_obs],
+                    Y_obs_bj=Y_bj[i_obs],
+                    n_obs_ot=n_obs_ot[i_obs],
+                    batch_size=batch_size, weight=weight, which_loss=which_loss)
+            if return_path:
+                path_t.append(obs_time)
+                path_y.append(y)
+                if return_var:
+                    path_var_y.append(var_y)
+
+        # after every observation has been processed, propagating until T
+        while current_time < T - 1e-10 * delta_t:
+            if current_time < T - delta_t:
+                delta_t_ = delta_t
+            else:
+                delta_t_ = T - current_time
+            y = self.next_cond_exp(
+                y, delta_t_, current_time+delta_t_, last_obs_time, X_tau_squared)
+            current_time = current_time + delta_t_
+
+            # Storing the predictions.
+            if return_path:
+                path_t.append(current_time)
+                path_y.append(y)
+
+        if get_loss and store_and_use_stored:
+            self.loss = loss
+        if return_path and store_and_use_stored:
+            self.path_t = np.array(path_t)
+            self.path_y = np.array(path_y)
+            if return_var:
+                self.path_var_y = np.array(path_var_y)
+
+        if return_path:
+            # path dimension: [time_steps, batch_size, output_size]
+            res = [loss, np.array(path_t), np.array(path_y)]
+            if return_var:
+                res.append(np.array(path_var_y))
+            return res
+        else:
+            return loss
+
+    def next_cond_exp(self, y, delta_t, current_t, last_obs_time, X_tau_squared):
+        tdiff = (current_t - last_obs_time).reshape((-1, 1))
+        var_cond = (self.volatility**2 / (2 * self.speed)) * (1 - np.exp(-2 * self.speed * tdiff))
+        sqrt_cond_exp = np.sqrt(var_cond)
+        return sqrt_cond_exp
+
+    def generate_paths(self, start_X=None):
+        raise NotImplementedError
+
 
 # ==============================================================================
 # dict for the supported stock models to get them from their name
@@ -3579,10 +4268,12 @@ DATASETS = {
     "BMandQuantiles": BMandQuantiles,
     "CIRUncertainParams": CIRUncertainParams,
     "BMClassification": BMClassification, 
-    "BlackScholesZ": BlackScholesZ, 
-    "OrnsteinUhlenbeckZ":OrnsteinUhlenbeckZ, 
-    "OrnsteinUhlenbeckMultiDimensional":OrnsteinUhlenbeckMultiDimensional, 
-    "OrnsteinUhlenbeckMulti_Z":OrnsteinUhlenbeckMulti_Z
+    "BlackScholes_Z": BlackScholes_Z,
+    "BlackScholes_Z_CV": BlackScholes_Z_CV,
+    "BlackScholes_QV": BlackScholes_QV, 
+    "OrnsteinUhlenbeck_Z": OrnsteinUhlenbeck_Z,
+    "OrnsteinUhlenbeck_Z_CV": OrnsteinUhlenbeck_Z_CV,
+    "OrnsteinUhlenbeck_QV": OrnsteinUhlenbeck_QV,
 }
 # ==============================================================================
 
