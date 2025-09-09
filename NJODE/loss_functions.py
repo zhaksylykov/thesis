@@ -243,7 +243,7 @@ def compute_loss_noisy_obs(
             Y_var_bj=Y_var_bj, Y_var=Y_var, dim_to=dim_to, type=var_loss_type)
 
     return outer / batch_size
-​
+
 def compute_loss_3(
         X_obs, Y_obs, Y_obs_bj, n_obs_ot, batch_size, eps=1e-10,
         weight=0.5, M_obs=None,

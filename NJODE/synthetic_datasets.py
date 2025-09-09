@@ -4246,12 +4246,10 @@ class OrnsteinUhlenbeck_QV(StockModel):
 # dict for the supported stock models to get them from their name
 DATASETS = {
     "BlackScholes": BlackScholes,
-    "Heston": Heston,
     "OrnsteinUhlenbeck": OrnsteinUhlenbeck,
     "HestonWOFeller": HestonWOFeller,
     "combined": Combined,
     "sine_BlackScholes": BlackScholes,
-    "sine_Heston": Heston,
     "sine_OrnsteinUhlenbeck": OrnsteinUhlenbeck,
     "PoissonPointProcess": PoissonPointProcess,
     "FBM": FracBM,

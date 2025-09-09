@@ -220,6 +220,8 @@ def create_dataset(
     else:
         obs_noise = None
 
+    hyperparam_dict['dt'] = dt 
+    ''' 
     # time_id = int(time.time())
     time_id = 1
     if len(df_overview) > 0:
@@ -250,7 +252,10 @@ def create_dataset(
         json.dump(hyperparam_dict, f, sort_keys=True)
 
     # stock_path dimension: [nb_paths, dimension, time_steps]
-    return path, time_id
+    return path, time_id 
+    ''' 
+    # stock_path dimension: [nb_paths, dimension, time_steps]
+    return stock_paths, observed_dates, nb_obs, hyperparam_dict, obs_noise
 
 
 def create_combined_dataset(
@@ -665,9 +670,11 @@ class IrregularDataset(Dataset):
     """
     class for iterating over a dataset
     """
-    def __init__(self, model_name, time_id=None, idx=None):
+    #def __init__(self, model_name, time_id=None, idx=None):
+    def __init__(self, dataset_collection, idx=None):
         stock_paths, observed_dates, nb_obs, hyperparam_dict, obs_noise = \
-            load_dataset(stock_model_name=model_name, time_id=time_id)
+            dataset_collection
+        #    load_dataset(stock_model_name=model_name, time_id=time_id)
         if idx is None:
             idx = np.arange(hyperparam_dict['nb_paths'])
         self.metadata = hyperparam_dict
@@ -1035,7 +1042,7 @@ def create_dataset_Z_minus_n_plus_n_X(
             raise ValueError("please provide a float (poisson lambda) "
                              "in hyperparam_dict['masked']")
 
-    stockmodel = DATASETS[stock_model_name](**hyperparam_dict)
+    stockmodel = _STOCK_MODELS[stock_model_name](**hyperparam_dict)
     # stock paths shape: [nb_paths, dim, time_steps]
     stock_paths, dt = stockmodel.generate_paths()
     size = stock_paths.shape
@@ -1126,14 +1133,46 @@ def create_dataset_Z_minus(
         stock_model_name="BlackScholes",
         hyperparam_dict=None,
         seed=0):
-
-  (Z_flattened, Z_obs_flattened, x_process, observed_dates, nb_obs,
-   hyperparam_dict, obs_noise) = create_dataset_Z_minus_n_plus_n_X(
+    #df_overview, data_overview = get_dataset_overview() 
+    (Z_flattened, Z_obs_flattened, x_process, observed_dates, nb_obs,
+     hyperparam_dict, obs_noise) = create_dataset_Z_minus_n_plus_n_X(
         stock_model_name=stock_model_name,
         hyperparam_dict=hyperparam_dict,
-        seed=seed)
+        seed=seed,divide_by_t=True) 
+    '''
+    Z_X = np.concatenate((Z_obs_flattened, Z_flattened, x_process), axis=1)
+    stock_model_name="BlackScholes_Z"
+    #time_id = int(time.time()) 
+    time_id = 1
+    if len(df_overview) > 0:
+        time_id = np.max(df_overview["id"].values) + 1
+    file_name = '{}-{}'.format(stock_model_name, time_id)
+    path = '{}{}/'.format(training_data_path, file_name)
+    if os.path.exists(path):
+        print('Path already exists - abort')
+        raise ValueError
+    df_app = pd.DataFrame(
+        data=[[stock_model_name, time_id, None]],
+        columns=['name', 'id', 'description']
+    )
+    df_overview = pd.concat([df_overview, df_app],
+                            ignore_index=True)
+    df_overview.to_csv(data_overview)
 
-  return Z_flattened, observed_dates, nb_obs, hyperparam_dict, obs_noise
+    os.makedirs(path)
+    with open('{}data.npy'.format(path), 'wb') as f:
+        np.save(f, Z_X)
+        np.save(f, observed_dates)
+        np.save(f, nb_obs)
+        if obs_noise is not None:
+            np.save(f, obs_noise)
+    with open('{}metadata.txt'.format(path), 'w') as f:
+        json.dump(hyperparam_dict, f, sort_keys=True)
+
+    # stock_path dimension: [nb_paths, dimension, time_steps]
+    return path, time_id
+    '''
+    return Z_flattened, observed_dates, nb_obs, hyperparam_dict, obs_noise
 
 
 
