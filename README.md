@@ -15,10 +15,11 @@ The goal is to adapt the NJ-ODEs framework ([floriankrach.github.io/njode](https
 
 ## What’s Different in This Repository. 
 
-- **Added configs:** 3 configs files added for 1d OU, 3d OU, and 1d GMB process 
-- **Z process datasets generation** Generation of datasets from (`Z_t = (X_{τ(t)} - X_t)(X_{τ(t)} - X_t)^T`)
-- **New loss functions** Introduced the "easy_vol" loss
-- **`generate.py`**: The main script for producing new synthetic time series using trained NJ-ODE models
+- **Added configs:** 2 configs files added for 1d OU, and 1d GMB process 
+- **Z process datasets** Generation of datasets from (`Z_t = (X_t - X_{τ(t)})(X_t - X_{τ(t)})^T`)
+- **New loss functions** Introduced the "vola" loss function 
+- **`train_gen.py`** A new file was created for the train function, and minor updates were made to other files.
+- **`generate.py`**: The main script for producing new synthetic time series using trained NJ-ODE models 
 - **Jupyter notebooks**: Includes notebooks with all experimental test runs.
 - **Thesis PDF**: The PDF version of the master’s thesis is included in the repository.
 
@@ -34,60 +35,51 @@ Same as in the original codebase, see [FlorianKrach/PD-NJODE/README](https://git
 ## Acknowledgements and References 
 Same as in the original codebase, see [FlorianKrach/PD-NJODE/README](https://github.com/FlorianKrach/PD-NJODE?tab=readme-ov-file)  
 
+---
 ## Instructions for generating synthetic data as in the thesis 
 
-Experiments were conducted using 3 processes, specifically 1-dimensional Geometric Brownian motion, 1-dimensional Ornstein-Uhlenbeck, and 3-dimensional Ornstein-Uhlenbeck processes. Configs for them can be found in the following folder: `NJODE/configs/`.
+Experiments were conducted using 2 processes, specifically 1-dimensional Geometric Brownian motion and 1-dimensional Ornstein-Uhlenbeck processes. Configs for them can be found in the following folder: `NJODE/configs/`.
 
-### How to run synthetic data generation
+---
+## How to Run
 
-Before generating synthetic data, you must first choose the appropriate config file for your experiment.  
-To do this, update the import path inside `generate.py` to point to the correct configuration (e.g., `1dBS`, `1dOU`, or `3dOU`).
+The refactored script (`generate.py`) automates the entire pipeline. In a single run, it will:
+1.  Load the dataset configuration.
+2.  Train the NJODE model for the drift (`mu`).
+3.  Train the NJODE model for the volatility (`sigma`).
+4.  Immediately use these newly trained models to generate the synthetic data paths.
 
 ---
 
-#### If no trained model exists
+### Usage Examples
 
-You need to follow two steps:
+Here are the primary ways to use the script.
 
-**Step 1: Create dataset and train NJ-ODE models**
+#### Scenario 1: Standard Generation 
 
-```bash
-python generate.py --task=train
-```
-This will: 
-
-- Generates a synthetic dataset based on the selected process
-- Trains NJ-ODE models for both drift (`mu`) and volatility (`vol`)
-- Saves the trained model checkpoints inside `data/saved_models/
-
-#### Step 2: Generate synthetic data using trained models
-
-After training, you need to know the ID numbers of the saved models for the `X` and `Z` processes.  
-These IDs correspond to folder names inside the `data/saved_models/` directory.
-
-Then run:
+This is the most common use case. It trains the models and generates a new set of paths from t = 0.
 
 ```bash
-python generate.py --task=generate --n_paths=1000 --mu_model_ckpt=1 --vol_model_ckpt=2 --output_name=synthetic_data.npy
+python generate.py
 ```
+This command will use the default settings:
 
-Replace `1` and `2` with the actual checkpoint folder names for `mu` and `vol` models. 
+* Generate **10,000** paths (`--n_paths=10000`).
+* Start generation from scratch (`--start_index=1`).
+* Save the output to the `../data/generated_data/` directory.
 
----
-
-### If trained models already exist
-
-If the NJ-ODE models have already been trained and saved, you can directly generate synthetic data using:
+#### Scenario 2: Conditional Generation
+This feature enables the generation of paths from a chosen point in the historical data, with full control over the number of paths and the save location.
 
 ```bash
-python generate.py --task=generate --n_paths=1000 --mu_model_ckpt=1 --vol_model_ckpt=2 --output_name=synthetic_data.npy
+python generate.py --start_index 50 --n_paths 500 --output_dir ./results/ 
 ```
+This command will use the following settings:
 
-Make sure to:
-- Set the correct config import inside `generate.py`
-- Use the correct IDs for the model checkpoints found in `data/saved_models/`
+* `--n_paths`: (Integer) Specifies the total number of synthetic paths to generate.
+* `--start_index`: (Integer) Sets the time step index from which to begin generation. A value of `1` starts the generation from t = 0. 
+* `--output_dir`: (String) Defines the directory path where the resulting `.npy` file containing the generated paths will be saved. 
 
-You can change the number of synthetic paths by adjusting the `--n_paths` argument. The name of the saved output file can be changed by adjusting the `--output_name=`. 
 
 ### Note 
 For smaller experiments, I found it convenient to use the notebook [explainability_njodes.ipynb](https://gist.github.com/FlorianKrach/7a610cd88d9739b2f8bbda8455a558b4).  
